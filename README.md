@@ -217,7 +217,12 @@ TCPLS will pass the connid of the TCPLS session corresponding to the
 received MPJOIN, alongside the received one-time cookie and the socket
 in which this MPJOIN handshake was received. In this case
 tcpls_handshake() will return PTLS_ERROR_HANDSHAKE_IS_MPJOIN to indicate
-the server that this handshake wasn't from a new client.
+the server that this handshake wasn't from a new client. The server can
+the call `tcpls_mpjoin_accept(tcpls_t *tcpls, int socket, uint8_t
+*cookie)` assuming it stored a mapping between connid and tcpls_t*. This
+function would properly link the TCP connection to the given tcpls
+session if the cookie is valid.
+
 
 #### Handshake properties
 
