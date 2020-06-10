@@ -39,7 +39,7 @@ The mere existence of this research comes from several observations:
   configuration of the transport layer to match their usage of the
   network.
 
-The goals of TCPLS are threefolds:
+The goal of TCPLS is threefold:
 
 * Providing a simple API to the application layer
 * Showing that alternative extensibility mechanisms can be powerful
@@ -108,7 +108,7 @@ The application is responsible for freeing its memory, using
 
 A tcpls connection may have multiple addresses and streams attached
 them. Addresses require to be added first if we expect to use them for
-connections.  
+a TCPLS connection.
 
 ### Adding addresses
 
@@ -187,12 +187,39 @@ aggregation of bandwidth with multipathing.
 
 picotcpls simply offer a wrapper around picotls's interactive hanshake (`ptls_handshake`):  
 
-`tcpls_handshake(ptls_t *tls);`
+`tcpls_handshake(ptls_t *tls, ptls_handshake_properties_t *properties);`
 
 this function waits until the handshake is complete or an error occured.
 It may also triggers various callbacks depending on events occuring in
-the handshake. Note that if an interactive mode is requirer,
-ptls_handshake is still available to use.
+the handshake.
+
+properties defines handshake configurations that the client and server
+can configure to modify the TCPLS handshake, such as the connection in
+which the handshake takes place (in case of multiple connections).
+
+In case of multiple connections (using multiple addresses), a first
+complete handshake must have occured over a chosen connection configured
+with the properties. Note, if `properties == NULL` then the handshake is
+performed over the primary connection. Then, to be able to use the other
+connected addresses, you must perform a MPJOIN TCPLS handshake by
+configuring the appropriate connection id within the properties and set
+`proprties->client.mpjoin = 1`, and then call `tcpls_handshake()` for
+each of the desired connection id.
+
+Server-side, if multiple addresses are announced to the client during
+the hanshake, the server must perform any next tcpls_handshake() with a
+configured mpjoin callback `int (*received_mpjoin_to_process)(int
+socket, uint8_t *connid, uint8_t *cookie)`  
+
+`properties->received_mpjoin_to_process = &my_function;`
+
+TCPLS will pass the connid of the TCPLS session corresponding to the
+received MPJOIN, alongside the received one-time cookie and the socket
+in which this MPJOIN handshake was received. In this case
+tcpls_handshake() will return PTLS_ERROR_HANDSHAKE_IS_MPJOIN to indicate
+the server that this handshake wasn't from a new client.
+
+#### Handshake properties
 
 ### Adding / closing streams
 

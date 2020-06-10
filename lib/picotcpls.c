@@ -476,7 +476,7 @@ int tcpls_connect(ptls_t *tls, struct sockaddr *src, struct sockaddr *dest,
 
 // TODO move socket in handshake properties
 
-int tcpls_handshake(ptls_t *tls, int socket, ptls_handshake_properties_t *properties) {
+int tcpls_handshake(ptls_t *tls, ptls_handshake_properties_t *properties) {
   tcpls_t *tcpls = tls->tcpls;
   if (!tcpls)
     return -1;
