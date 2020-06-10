@@ -1316,8 +1316,6 @@ static void test_tcpls_mpjoin(void)
   memset(coffs, 0, sizeof(coffs));
   memset(soffs, 0, sizeof(soffs));
 
-  ctx->save_ticket = NULL; /* don't allow further test to update the saved ticket */
-
   ptls_buffer_dispose(&cbuf);
   ptls_buffer_dispose(&sbuf);
   tcpls_free(tcpls_client);

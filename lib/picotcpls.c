@@ -464,25 +464,6 @@ int tcpls_connect(ptls_t *tls, struct sockaddr *src, struct sockaddr *dest,
 }
 
 /**
- * accept connection and call tcpls_join to trigger the join procedure if a
- * tcpls connection already exist
- *
- * Server-side, those connection informations must be grouped together at
- * handshake time once we know which client owns which set of addresses
- */
-
-int tcpls_accept(int listenfd, struct sockaddr *cliaddr, void
-    (*tcpls_join)(tcpls_t *, struct sockaddr*, int)) {
-  int socket;
-  if ((socket = accept(listenfd, cliaddr, 0)) != -1)
-    tcpls_join(NULL, cliaddr, socket);
-  else
-    return -1;
-  return 0;
-}
-
-
-/**
  * Performs a TLS handshake upon the primary connection. If this handshake is
  * server-side, the server must provide a callback function in the handshake
  * properties tu support multihoming connections. Note that, server side, then

@@ -180,9 +180,6 @@ void *tcpls_new();
 int tcpls_connect(ptls_t *tls, struct sockaddr *src, struct sockaddr *dest,
     struct timeval *timeout);
 
-int tcpls_accept(int listenfd, struct sockaddr *addr, void
-    (*tcpls_join)(tcpls_t*, struct sockaddr*, int));
-
 int tcpls_handshake(ptls_t *tls, int socket, ptls_handshake_properties_t *properties);
 
 int tcpls_add_v4(ptls_t *tls, struct sockaddr_in *addr, int is_primary, int
