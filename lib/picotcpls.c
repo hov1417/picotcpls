@@ -480,6 +480,7 @@ int tcpls_handshake(ptls_t *tls, ptls_handshake_properties_t *properties) {
   tcpls_t *tcpls = tls->tcpls;
   if (!tcpls)
     return -1;
+  int socket = 0;
   /** Get the right socket */
   if (!tls->is_server && !socket) {
     connect_info_t *con = get_primary_con_info(tcpls);
@@ -488,8 +489,8 @@ int tcpls_handshake(ptls_t *tls, ptls_handshake_properties_t *properties) {
     socket = con->socket;
   }
   /** set the handshake socket */
-  if (properties) {
-    properties->socket = socket;
+  if (properties && !socket) {
+    socket = properties->socket;
   }
   ssize_t rret;
   int ret;
