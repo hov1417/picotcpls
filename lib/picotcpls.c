@@ -539,6 +539,20 @@ Exit:
 }
 
 /**
+ * Server-side function called when the server knows it needs to attach a TCP
+ * connection to a given tcpls_t session.
+ *
+ * This function check whether the received cookie is valid. If it is, it
+ * creates a new connection and trigger a callback, marking this con usable to
+ * attach streams.
+ */
+
+int tcpls_mpjoin_accept(tcpls_t *tcpls, int socket, uint8_t *cookie) {
+  return 0;
+}
+
+
+/**
 * Create and attach locally a new stream to the main address if no addr
 * is provided; else attach to addr if we have a connection open to it
 *
