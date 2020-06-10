@@ -1410,11 +1410,6 @@ int handle_tcpls_extension_option(ptls_t *ptls, tcpls_enum_t type,
         return ret;
       }
       break;
-    case MPJOIN:
-      {
-        /** Sent on a new connection to prove ownership of the cli address*/
-        break;
-      }
     case STREAM_CLOSE:
       {
        // TODO encoding with network order and decoding to host order
