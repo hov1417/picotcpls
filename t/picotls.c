@@ -557,6 +557,12 @@ enum {
     TEST_HANDSHAKE_KEY_UPDATE
 };
 
+static int mpjoin_process(int socket, uint8_t *connid, uint8_t *cookie) {
+    assert(connid);
+    assert(cookie);
+    return 0;
+}
+
 static int on_extension_cb(ptls_on_extension_t *self, ptls_t *tls, uint8_t hstype, uint16_t exttype, ptls_iovec_t extdata)
 {
     assert(extdata.base);
@@ -1246,6 +1252,82 @@ static void test_sends_varlen_bpf_prog(void)
   tcpls_free(tcpls_server);
 }
 
+static void test_tcpls_mpjoin(void)
+{
+
+  ptls_t *client, *server;
+  ctx->support_tcpls_options = 1;
+  ctx_peer->support_tcpls_options = 1;
+  ctx_peer->tcpls_options_confirmed =0;
+  ctx->tcpls_options_confirmed = 0;
+
+  ptls_buffer_t cbuf, sbuf;
+  size_t coffs[5] = {0}, soffs[5];
+  static ptls_on_extension_t cb = {on_extension_cb};
+  ctx_peer->on_extension = &cb;
+  ctx->on_extension = &cb;
+  int ret;
+  size_t consumed;
+  tcpls_t *tcpls_client = tcpls_new(ctx, 0);
+  tcpls_t *tcpls_server = tcpls_new(ctx_peer, 1);
+  tcpls_t *tcpls_server2 = tcpls_new(ctx_peer, 1);
+  ptls_buffer_init(&cbuf, "", 0);
+  ptls_buffer_init(&sbuf, "", 0);
+
+  client = tcpls_client->tls;
+  server = tcpls_server->tls;
+  
+  ret = ptls_handle_message(client, &cbuf, coffs, 0, NULL, 0, NULL);
+  
+  ok(ret == PTLS_ERROR_IN_PROGRESS);
+  ret = feed_messages(server, &sbuf, soffs, cbuf.base, coffs, NULL);
+  ok(ret == 0);
+  ok(sbuf.off != 0);
+  ok(!ptls_handshake_is_complete(server));
+  ok(ctx_peer->tcpls_options_confirmed == 1);
+  ret = feed_messages(client, &cbuf, coffs, sbuf.base, soffs, NULL);
+  ok(ret == 0);
+  ok(cbuf.off != 0);
+  ok(ptls_handshake_is_complete(client));
+  ok(ctx->tcpls_options_confirmed == 1);
+  
+  ret = feed_messages(server, &sbuf, soffs, cbuf.base, coffs, NULL);
+  ok(ret == 0);
+  ok(sbuf.off == 0);
+  ok(ptls_handshake_is_complete(server));
+  
+  ptls_handshake_properties_t properties;
+  memset(&properties, 0, sizeof(properties));
+  properties.client.mpjoin = 1;
+  properties.received_mpjoin_to_process = &mpjoin_process;
+  /** testing the MPJOIN client hello */
+  cbuf.off = 0;
+  ret = ptls_handshake(client, &cbuf, NULL, NULL, &properties);
+  ok(ret == PTLS_ERROR_HANDSHAKE_IS_MPJOIN);
+  ok(cbuf.off != 0);
+  /** processing MPJOIN */
+  consumed = cbuf.off;
+  sbuf.off = 0;
+  ctx_peer->tcpls_options_confirmed = 0;
+  ret = ptls_handshake(tcpls_server2->tls, &sbuf, cbuf.base, &consumed, &properties);
+  ok(ret == PTLS_ERROR_HANDSHAKE_IS_MPJOIN);
+  cbuf.off = 0;
+  sbuf.off = 0;
+  memset(coffs, 0, sizeof(coffs));
+  memset(soffs, 0, sizeof(soffs));
+
+  ctx->save_ticket = NULL; /* don't allow further test to update the saved ticket */
+
+  ptls_buffer_dispose(&cbuf);
+  ptls_buffer_dispose(&sbuf);
+  tcpls_free(tcpls_client);
+  tcpls_free(tcpls_server);
+  tcpls_free(tcpls_server2);
+  ctx->tcpls_options_confirmed = 0;
+  ctx_peer->tcpls_options_confirmed = 0;
+  ctx->support_tcpls_options = 0;
+  ctx_peer->support_tcpls_options = 0;
+}
 
 static void test_sends_tcpls_record(void)
 {
@@ -1253,7 +1335,7 @@ static void test_sends_tcpls_record(void)
   ctx->support_tcpls_options = 1;
   ctx_peer->support_tcpls_options = 1;
   ctx_peer->tcpls_options_confirmed =0;
-  ctx->tcpls_options_confirmed =0;
+  ctx->tcpls_options_confirmed = 0;
 
   ptls_buffer_t cbuf, sbuf, decbuf;
   size_t coffs[5] = {0}, soffs[5];
@@ -1939,6 +2021,7 @@ static void test_tcpls(void)
     subtest("server_sends_tcpls_encrypted_extensions", test_server_sends_tcpls_encrypted_extensions);
     subtest("sends_tcpls_record", test_sends_tcpls_record);
     subtest("sends_varlen_bpf_prog", test_sends_varlen_bpf_prog);
+    subtest("mpjoin", test_tcpls_mpjoin);
     ctx_peer->sign_certificate = sc_orig;
 
     if (ctx_peer != ctx)

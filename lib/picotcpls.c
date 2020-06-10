@@ -93,19 +93,16 @@ static int handle_connect(tcpls_t *tcpls, tcpls_v4_addr_t *src, tcpls_v4_addr_t
     int *nfds, int *maxfds, connect_info_t *coninfo, fd_set *wset);
 
 void *tcpls_new(void *ctx, int is_server) {
-  ptls_context_t *ptls_ctx = (ptls_context_t *) ctx;
   ptls_t *tls;
+  ptls_context_t *ptls_ctx = (ptls_context_t *) ctx;
   tcpls_t *tcpls  = malloc(sizeof(*tcpls));
   if (tcpls == NULL)
     return NULL;
+  memset(tcpls, 0, sizeof(*tcpls));
   tcpls->cookies = new_list(128, 4);
   if (is_server) {
     tls = ptls_server_new(ptls_ctx);
     tcpls->next_stream_id = 2147483649;  // 2**31 +1
-  }
-  else {
-    tls = ptls_client_new(ptls_ctx);
-    tcpls->next_stream_id = 1;
     /** Generate connid and cookie */
     ptls_ctx->random_bytes(tcpls->connid, 128);
     uint8_t rand_cookies[128];
@@ -113,6 +110,10 @@ void *tcpls_new(void *ctx, int is_server) {
       ptls_ctx->random_bytes(rand_cookies, 128);
       list_add(tcpls->cookies, rand_cookies);
     }
+  }
+  else {
+    tls = ptls_client_new(ptls_ctx);
+    tcpls->next_stream_id = 1;
   }
   // init tcpls stuffs
   tcpls->sendbuf = malloc(sizeof(*tcpls->sendbuf));
@@ -505,12 +506,16 @@ int tcpls_handshake(ptls_t *tls, int socket, ptls_handshake_properties_t *proper
       goto Exit;
     socket = con->socket;
   }
+  /** set the handshake socket */
+  if (properties) {
+    properties->socket = socket;
+  }
   ssize_t rret;
   int ret;
   ptls_buffer_t sendbuf;
   /** Sends the client hello (or the mpjoin client hello */
   ptls_buffer_init(&sendbuf, "", 0);
-  if ((ret = ptls_handshake(tls, &sendbuf, NULL, NULL, properties)) == PTLS_ERROR_IN_PROGRESS) {
+  if (!tls->is_server && (ret = ptls_handshake(tls, &sendbuf, NULL, NULL, properties)) == PTLS_ERROR_IN_PROGRESS) {
     rret = 0;
     while (rret < sendbuf.off) {
       if ((ret = send(socket, sendbuf.base, sendbuf.off, 0)) < 0)
@@ -522,32 +527,31 @@ int tcpls_handshake(ptls_t *tls, int socket, ptls_handshake_properties_t *proper
       ptls_buffer_dispose(&sendbuf);
       return 0;
     }
-    sendbuf.off = 0;
-    ssize_t roff;
-    uint8_t recvbuf[8192];
-    do {
-      while ((rret = read(socket, recvbuf, sizeof(recvbuf))) == -1 && errno == EINTR)
-          ;
-      if (rret == 0)
-        goto Exit;
-      roff = 0;
-      do {
-        ptls_buffer_init(&sendbuf, "", 0);
-        size_t consumed = rret - roff;
-        ret = ptls_handshake(tls, &sendbuf, recvbuf + roff, &consumed, properties);
-        roff += consumed;
-        if ((ret == 0 || ret == PTLS_ERROR_IN_PROGRESS) && sendbuf.off != 0) {
-          if ((rret = send(socket, sendbuf.base, sendbuf.off, 0)) < 0) {
-             goto Exit;
-          }
-        }
-        ptls_buffer_dispose(&sendbuf);
-      } while (ret == PTLS_ERROR_IN_PROGRESS && rret != roff);
-    } while (ret == PTLS_ERROR_IN_PROGRESS);
-    ptls_buffer_dispose(&sendbuf);
-    /** TODO If multiple addresses; we should send them now? */
-    return 0;
   }
+  sendbuf.off = 0;
+  ssize_t roff;
+  uint8_t recvbuf[8192];
+  do {
+    while ((rret = read(socket, recvbuf, sizeof(recvbuf))) == -1 && errno == EINTR)
+        ;
+    if (rret == 0)
+      goto Exit;
+    roff = 0;
+    do {
+      ptls_buffer_init(&sendbuf, "", 0);
+      size_t consumed = rret - roff;
+      ret = ptls_handshake(tls, &sendbuf, recvbuf + roff, &consumed, properties);
+      roff += consumed;
+      if ((ret == 0 || ret == PTLS_ERROR_IN_PROGRESS) && sendbuf.off != 0) {
+        if ((rret = send(socket, sendbuf.base, sendbuf.off, 0)) < 0) {
+           goto Exit;
+        }
+      }
+      ptls_buffer_dispose(&sendbuf);
+    } while (ret == PTLS_ERROR_IN_PROGRESS && rret != roff);
+  } while (ret == PTLS_ERROR_IN_PROGRESS);
+  ptls_buffer_dispose(&sendbuf);
+  return ret;
 Exit:
   ptls_buffer_dispose(&sendbuf);
   return -1;
@@ -1868,6 +1872,7 @@ void tcpls_free(tcpls_t *tcpls) {
   free(tcpls->recvbuf);
   list_free(tcpls->streams);
   list_free(tcpls->connect_infos);
+  list_free(tcpls->cookies);
   ptls_tcpls_options_free(tcpls);
 #define FREE_ADDR_LLIST(current, next) do {              \
   if (!next) {                                           \

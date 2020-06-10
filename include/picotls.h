@@ -173,6 +173,7 @@ extern "C" {
 #define PTLS_ERROR_REJECT_EARLY_DATA (PTLS_ERROR_CLASS_INTERNAL + 9)
 #define PTLS_ERROR_DELEGATE (PTLS_ERROR_CLASS_INTERNAL + 10)
 #define PTLS_ERROR_STREAM_NOT_FOUND (PTLS_ERROR_CLASS_INTERNAL + 11)
+#define PTLS_ERROR_HANDSHAKE_IS_MPJOIN (PTLS_ERROR_CLASS_INTERNAL + 12)
 
 #define PTLS_ERROR_INCORRECT_BASE64 (PTLS_ERROR_CLASS_INTERNAL + 50)
 #define PTLS_ERROR_PEM_LABEL_NOT_FOUND (PTLS_ERROR_CLASS_INTERNAL + 51)
@@ -243,6 +244,8 @@ extern "C" {
 #define PTLS_EXTENSION_TYPE_ENCRYPTED_MULTIHOMING_v6 103
 #define PTLS_EXTENSION_TYPE_ENCRYPTED_CONNID 104
 #define PTLS_EXTENSION_TYPE_ENCRYPTED_COOKIE 105
+/** unencrypted mpjoin */
+#define PTLS_EXTENSION_TYPE_MPJOIN 106
 
 #define PTLS_PROTOCOL_VERSION_TLS13_FINAL 0x0304
 #define PTLS_PROTOCOL_VERSION_TLS13_DRAFT26 0x7f1a
@@ -934,6 +937,16 @@ typedef struct st_ptls_log_event_t {
      * an optional callback that reports the extensions being collected
      */
     int (*collected_extensions)(ptls_t *tls, struct st_ptls_handshake_properties_t *properties, ptls_raw_extension_t *extensions);
+
+    /**
+     * A callback used when a mpjoin is received
+     */
+    int (*received_mpjoin_to_process)(int socket, uint8_t *connid, uint8_t *cookie);
+    
+    /**
+     * TCPLS handshake socket
+     */
+    int socket;
   };
 #ifdef _WINDOWS
 #pragma warning(pop)

@@ -453,6 +453,16 @@ static int commit_record_message(ptls_message_emitter_t *_self)
     return ret;
 }
 
+static int commit_record_mpjoin(ptls_message_emitter_t *_self)
+{
+  struct st_ptls_record_message_emitter_t *self = (void *)_self;
+  size_t sz = self->super.buf->off - self->rec_start - 5;
+  assert(sz <= PTLS_MAX_PLAINTEXT_RECORD_SIZE);
+  self->super.buf->base[self->rec_start + 3] = (uint8_t)(sz >> 8);
+  self->super.buf->base[self->rec_start + 4] = (uint8_t)(sz);
+  return 0;
+}
+
 #define buffer_push_extension(buf, type, block)                                                                                    \
     do {                                                                                                                           \
         ptls_buffer_push16((buf), (type));                                                                                         \
@@ -1611,8 +1621,8 @@ static int send_client_hello(ptls_t *tls, ptls_message_emitter_t *emitter, ptls_
     uint8_t binder_key[PTLS_MAX_DIGEST_SIZE];
     int ret, is_second_flight = tls->key_schedule != NULL,
              send_sni = tls->server_name != NULL && !ptls_server_name_is_ipaddr(tls->server_name);
-
-    if (properties != NULL) {
+    int is_mpjoin = properties && properties->client.mpjoin && !tls->is_server;
+    if (properties != NULL && !is_mpjoin) {
         /* try to use ESNI */
         if (!is_second_flight && send_sni && properties->client.esni_keys.base != NULL) {
             if ((ret = client_setup_esni(tls->ctx, &tls->esni, properties->client.esni_keys, &published_sni, tls->client_random)) !=
@@ -1659,7 +1669,7 @@ static int send_client_hello(ptls_t *tls, ptls_message_emitter_t *emitter, ptls_
     if (tls->key_share == NULL && !(properties != NULL && properties->client.negotiate_before_key_exchange))
         tls->key_share = tls->ctx->key_exchanges[0];
 
-    if (!is_second_flight) {
+    if (!is_second_flight && !is_mpjoin) {
         tls->key_schedule = key_schedule_new(tls->cipher_suite, tls->ctx->cipher_suites, tls->ctx->hkdf_label_prefix__obsolete);
         if ((ret = key_schedule_extract(tls->key_schedule, resumption_secret)) != 0)
             goto Exit;
@@ -1685,6 +1695,20 @@ static int send_client_hello(ptls_t *tls, ptls_message_emitter_t *emitter, ptls_
         ptls_buffer_push_block(sendbuf, 1, { ptls_buffer_push(sendbuf, 0); });
         /* extensions */
         ptls_buffer_push_block(sendbuf, 2, {
+            /* we send the connid with a cookie :) */
+            if (properties != NULL && properties->client.mpjoin) {
+                buffer_push_extension(sendbuf, PTLS_EXTENSION_TYPE_MPJOIN, {
+                    ptls_buffer_push_block(sendbuf, 1, {
+                        ptls_buffer_pushv(sendbuf, tls->tcpls->connid, 128);
+                    });
+                    ptls_buffer_push_block(sendbuf, 1, {
+                        uint8_t *cookie = list_get(tls->tcpls->cookies, tls->tcpls->cookies->size-1);
+                        assert(cookie);
+                        ptls_buffer_pushv(sendbuf, cookie, 128);
+                        list_remove(tls->tcpls->cookies, cookie);
+                    });
+                });
+            }
             struct {
                 size_t off;
                 size_t len;
@@ -1771,7 +1795,9 @@ static int send_client_hello(ptls_t *tls, ptls_message_emitter_t *emitter, ptls_
             });
             if (cookie != NULL && cookie->base != NULL) {
                 buffer_push_extension(sendbuf, PTLS_EXTENSION_TYPE_COOKIE, {
-                    ptls_buffer_push_block(sendbuf, 2, { ptls_buffer_pushv(sendbuf, cookie->base, cookie->len); });
+                    ptls_buffer_push_block(sendbuf, 2, {
+                        ptls_buffer_pushv(sendbuf, cookie->base, cookie->len);
+                        });
                 });
             }
             if ((ret = push_additional_extensions(properties, sendbuf)) != 0)
@@ -1786,13 +1812,15 @@ static int send_client_hello(ptls_t *tls, ptls_message_emitter_t *emitter, ptls_
                 });
             }
             if (resumption_secret.base != NULL) {
-                if (tls->client.using_early_data && !is_second_flight)
+                if (tls->client.using_early_data && !is_second_flight && !is_mpjoin)
                     buffer_push_extension(sendbuf, PTLS_EXTENSION_TYPE_EARLY_DATA, {});
                 /* pre-shared key "MUST be the last extension in the ClientHello" (draft-17 section 4.2.6) */
                 buffer_push_extension(sendbuf, PTLS_EXTENSION_TYPE_PRE_SHARED_KEY, {
                     ptls_buffer_push_block(sendbuf, 2, {
-                        ptls_buffer_push_block(sendbuf, 2,
-                                               { ptls_buffer_pushv(sendbuf, resumption_ticket.base, resumption_ticket.len); });
+                        ptls_buffer_push_block(sendbuf, 2, {
+                            ptls_buffer_pushv(sendbuf, resumption_ticket.base,
+                                resumption_ticket.len); 
+                            });
                         ptls_buffer_push32(sendbuf, obfuscated_ticket_age);
                     });
                     /* allocate space for PSK binder. the space is filled at the bottom of the function */
@@ -1809,7 +1837,7 @@ static int send_client_hello(ptls_t *tls, ptls_message_emitter_t *emitter, ptls_
     });
 
     /* update the message hash, filling in the PSK binder HMAC if necessary */
-    if (resumption_secret.base != NULL) {
+    if (resumption_secret.base != NULL && !is_mpjoin) {
         size_t psk_binder_off = emitter->buf->off - (3 + tls->key_schedule->hashes[0].algo->digest_size);
         if ((ret = derive_secret_with_empty_digest(tls->key_schedule, binder_key, "res binder")) != 0)
             goto Exit;
@@ -1818,21 +1846,28 @@ static int send_client_hello(ptls_t *tls, ptls_message_emitter_t *emitter, ptls_
         if ((ret = calc_verify_data(emitter->buf->base + psk_binder_off + 3, tls->key_schedule, binder_key)) != 0)
             goto Exit;
     }
-    ptls__key_schedule_update_hash(tls->key_schedule, emitter->buf->base + msghash_off, emitter->buf->off - msghash_off);
+    /** do not update hash if this is a mpjoin */
+    if (!is_mpjoin)
+      ptls__key_schedule_update_hash(tls->key_schedule, emitter->buf->base + msghash_off, emitter->buf->off - msghash_off);
 
-    if (tls->client.using_early_data) {
+    if (tls->client.using_early_data && !is_mpjoin) {
         assert(!is_second_flight);
         if ((ret = setup_traffic_protection(tls, 1, "c e traffic", 1, 0)) != 0)
             goto Exit;
         if ((ret = push_change_cipher_spec(tls, emitter)) != 0)
             goto Exit;
     }
-    if (resumption_secret.base != NULL && !is_second_flight) {
+    if (resumption_secret.base != NULL && !is_second_flight && !is_mpjoin) {
         if ((ret = derive_exporter_secret(tls, 1)) != 0)
             goto Exit;
     }
-    tls->state = cookie == NULL ? PTLS_STATE_CLIENT_EXPECT_SERVER_HELLO : PTLS_STATE_CLIENT_EXPECT_SECOND_SERVER_HELLO;
-    ret = PTLS_ERROR_IN_PROGRESS;
+
+    if (properties && properties->client.mpjoin)
+      ret = PTLS_ERROR_HANDSHAKE_IS_MPJOIN;
+    else {
+      tls->state = cookie == NULL ? PTLS_STATE_CLIENT_EXPECT_SERVER_HELLO : PTLS_STATE_CLIENT_EXPECT_SECOND_SERVER_HELLO;
+      ret = PTLS_ERROR_IN_PROGRESS;
+    }
 
 Exit:
     if (published_sni != NULL) {
@@ -2963,7 +2998,7 @@ static int decode_client_hello(ptls_t *tls, struct st_ptls_client_hello_t *ch,
         ch->compression_methods.count = end - src;
         src = end;
     });
-
+    int did_we_received_mpjoin = 0;
     /* decode extensions */
     decode_extensions(src, end, PTLS_HANDSHAKE_TYPE_CLIENT_HELLO, &exttype, {
         if (tls->ctx->on_extension != NULL &&
@@ -3117,6 +3152,24 @@ static int decode_client_hello(ptls_t *tls, struct st_ptls_client_hello_t *ch,
                 });
             });
             break;
+        case PTLS_EXTENSION_TYPE_MPJOIN: {
+          uint8_t connid[128];
+          uint8_t cookie[128];
+          did_we_received_mpjoin = 1;
+          ptls_decode_open_block(src, end, 1, {
+            size_t len = end - src;
+            memcpy(connid, src, len);
+            src += len;
+          });
+          ptls_decode_block(src, end, 1, {
+            size_t len = end - src;
+            memcpy(cookie, src, len);
+            src += len;
+          });
+          assert(properties->received_mpjoin_to_process);
+          if (properties->received_mpjoin_to_process(properties->socket, connid, cookie))
+            goto Exit;
+        } break;
         case PTLS_EXTENSION_TYPE_PRE_SHARED_KEY: {
             size_t num_identities = 0;
             ptls_decode_open_block(src, end, 2, {
@@ -3205,8 +3258,10 @@ static int decode_client_hello(ptls_t *tls, struct st_ptls_client_hello_t *ch,
         ret = PTLS_ALERT_PROTOCOL_VERSION;
         goto Exit;
     }
-
-    ret = 0;
+    if (did_we_received_mpjoin)
+      ret = PTLS_ERROR_HANDSHAKE_IS_MPJOIN;
+    else
+      ret = 0;
 Exit:
     return ret;
 }
@@ -4551,13 +4606,19 @@ ServerSkipEarlyData:
 }
 
 static void init_record_message_emitter(ptls_t *tls, struct
-    st_ptls_record_message_emitter_t *emitter, ptls_buffer_t *sendbuf)
+    st_ptls_record_message_emitter_t *emitter, ptls_buffer_t *sendbuf, int is_mpjoin)
 {
     int record_header_length;
     record_header_length = 5;
-    *emitter = (struct st_ptls_record_message_emitter_t){
-        {sendbuf, &tls->traffic_protection.enc, record_header_length,
-          begin_record_message, commit_record_message}};
+    if (is_mpjoin) {
+      *emitter = (struct st_ptls_record_message_emitter_t){
+          {sendbuf, &tls->traffic_protection.enc, record_header_length,
+            begin_record_message, commit_record_mpjoin}};
+    }
+    else
+      *emitter = (struct st_ptls_record_message_emitter_t){
+          {sendbuf, &tls->traffic_protection.enc, record_header_length,
+            begin_record_message, commit_record_message}};
 }
 
 int ptls_handshake(ptls_t *tls, ptls_buffer_t *_sendbuf, const void *input,
@@ -4565,10 +4626,11 @@ int ptls_handshake(ptls_t *tls, ptls_buffer_t *_sendbuf, const void *input,
 {
     struct st_ptls_record_message_emitter_t emitter;
     int ret;
+    int is_mpjoin = properties && properties->client.mpjoin && !tls->is_server;
 
-    assert(tls->state < PTLS_STATE_POST_HANDSHAKE_MIN || properties->client.mpjoin);
+    assert(tls->state < PTLS_STATE_POST_HANDSHAKE_MIN || is_mpjoin);
 
-    init_record_message_emitter(tls, &emitter, _sendbuf);
+    init_record_message_emitter(tls, &emitter, _sendbuf, is_mpjoin);
     size_t sendbuf_orig_off = emitter.super.buf->off;
 
     /* special handlings */
@@ -4582,7 +4644,8 @@ int ptls_handshake(ptls_t *tls, ptls_buffer_t *_sendbuf, const void *input,
         break;
     }
 
-    if (properties->client.mpjoin && tls->ctx->tcpls_options_confirmed) {
+    if (!tls->is_server && properties && properties->client.mpjoin &&
+        tls->ctx->tcpls_options_confirmed) {
         return send_client_hello(tls, &emitter.super, properties, NULL);
     }
 
@@ -4605,6 +4668,7 @@ int ptls_handshake(ptls_t *tls, ptls_buffer_t *_sendbuf, const void *input,
 
     switch (ret) {
     case 0:
+    case PTLS_ERROR_HANDSHAKE_IS_MPJOIN:
     case PTLS_ERROR_IN_PROGRESS:
     case PTLS_ERROR_STATELESS_RETRY:
         break;
@@ -4665,7 +4729,7 @@ int update_send_key(ptls_t *tls, ptls_buffer_t *_sendbuf, int request_update)
     struct st_ptls_record_message_emitter_t emitter;
     int ret;
 
-    init_record_message_emitter(tls, &emitter, _sendbuf);
+    init_record_message_emitter(tls, &emitter, _sendbuf, 0);
     size_t sendbuf_orig_off = emitter.super.buf->off;
 
     ptls_push_message(&emitter.super, NULL, PTLS_HANDSHAKE_TYPE_KEY_UPDATE,
