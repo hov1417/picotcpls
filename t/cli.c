@@ -329,16 +329,6 @@ static int run_server(struct sockaddr *sa, socklen_t salen, ptls_context_t *ctx,
 {
     int listen_fd, conn_fd, on = 1;
     
-    /*if(ctx->support_tcpls_options){
-	struct timeval timeout;
-	timeout.tv_sec = 150;
-        timeout.tv_usec = 0;
-        printf("trying connected\n");
-	int err = tcpls_connect(tcpls->tls, NULL, NULL, &timeout);
-	assert(err);
-	printf("connected\n");
-    }*/
-
     if ((listen_fd = socket(sa->sa_family, SOCK_STREAM, 0)) == -1) {
         perror("socket(2) failed");
         return 1;
