@@ -35,9 +35,10 @@ typedef enum tcpls_enum_t {
 } tcpls_enum_t;
 
 typedef enum tcpls_tcp_state_t {
+  CLOSED,
   CONNECTING,
   CONNECTED,
-  CLOSED
+  WANTS_WRITE
 } tcpls_tcp_state_t;
 
 struct st_tcpls_options_t {

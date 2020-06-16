@@ -48,6 +48,7 @@
 #endif
 #include "picotls.h"
 #include "picotls/openssl.h"
+#include "containers.h"
 #if PICOTLS_USE_BROTLI
 #include "picotls/certificate_compression.h"
 #endif
@@ -66,42 +67,73 @@ static void shift_buffer(ptls_buffer_t *buf, size_t delta)
     }
 }
 
-struct tcpls_options{
-	int timeoutval;
-	unsigned int second;
-	struct sockaddr_in addr;
-	struct sockaddr_in addr2;
-    	struct sockaddr_in6 addr6;
-	struct sockaddr_in ours_addr;
-    	struct sockaddr_in6 ours_addr6;
-	unsigned int timeout:1;
-	unsigned int v4_1:1;
-	unsigned int v4_2:1;
-	unsigned int v6:1;
-	unsigned int ours_v4:1;
-	unsigned int ours_v6:1;
+struct tcpls_options {
+	  int timeoutval;
+    unsigned int timeout;
+	  unsigned int is_second;
+    list_t *our_addrs;
+    list_t *our_addrs6;
+    list_t *peer_addrs;
+    list_t *peer_addrs6;
 };
 
+struct conn_to_tcpls {
+  int conn_fd;
+  unsigned int wants_to_write : 1;
+  tcpls_t *tcpls;
+};
+
+static struct tcpls_options tcpls_options;
+
+
+static void make_nonblocking(int fd)
+{
+    fcntl(fd, F_SETFL, O_NONBLOCK);
+}
+
+/** Temporaly to ease devopment. Later on: merge with handle_connection and make
+ * TCPLS supports TLS 1.3's integration tests */
+
+static void tcpls_add_ips(tcpls_t *tcpls, struct sockaddr_storage *sa_our,
+    struct sockaddr_storage *sa_peer, int nbr_our, int nbr_peer) {
+  int settopeer = tcpls->tls->is_server;
+  for (int i = 0; i < nbr_our; i++) {
+    if (sa_our[i].ss_family == AF_INET)
+      tcpls_add_v4(tcpls->tls, (struct sockaddr_in*)&sa_our[i], 0, settopeer, 1);
+    else
+      tcpls_add_v6(tcpls->tls, (struct sockaddr_in6*)&sa_our[i], 0, settopeer, 1);
+  }
+  for (int i = 0; i < nbr_peer; i++) {
+    if(sa_peer[i].ss_family == AF_INET)
+      tcpls_add_v4(tcpls->tls, (struct sockaddr_in*)&sa_peer[i], 0, 0, 0);
+    else
+      tcpls_add_v6(tcpls->tls, (struct sockaddr_in6*)&sa_peer[i], 0, 0, 0);
+  }
+}
+static  int handle_tcpls_read(tcpls_t *tcpls, int socket) {
+  return 0;
+}
+
+static int handle_tcpls_write(tcpls_t *tcpls, int socket) {
+  return 0;
+}
+
+static int handle_client_connection(tcpls_t *tcpls) {
+  return 0;
+}
+
 static int handle_connection(int sockfd, ptls_context_t *ctx, const char *server_name, const char *input_file,
-                             ptls_handshake_properties_t *hsprop, int request_key_update, 
-			    int keep_sender_open, tcpls_t *tcpls, struct tcpls_options *tcpls_options)
+                             ptls_handshake_properties_t *hsprop, int request_key_update, int keep_sender_open)
 {
     static const int inputfd_is_benchmark = -2;
-    ptls_t *tls;
-    if(!ctx->support_tcpls_options)
-    	tls = ptls_new(ctx, server_name == NULL);
-    else tls = tcpls->tls;
-
-
     
-
+    ptls_t *tls = ptls_new(ctx, server_name == NULL);
     ptls_buffer_t rbuf, encbuf, ptbuf;
     enum { IN_HANDSHAKE, IN_1RTT, IN_SHUTDOWN } state = IN_HANDSHAKE;
     int inputfd = 0, ret = 0;
     size_t early_bytes_sent = 0;
     uint64_t data_received = 0;
     ssize_t ioret;
-    unsigned int settcpls_option = 0;
 
     uint64_t start_at = ctx->get_time->cb(ctx->get_time);
 
@@ -138,20 +170,6 @@ static int handle_connection(int sockfd, ptls_context_t *ctx, const char *server
         fd_set readfds, writefds, exceptfds;
         int maxfd = 0;
         struct timeval timeout;
-
-	/* checks if handshake is complete to send tcpls_options*/
-	if(ptls_handshake_is_complete(tls) && !settcpls_option){
-		if(ctx->support_tcpls_options){
-	    		assert(ctx->tcpls_options_confirmed);
-			if(tcpls_options->timeout){
-				assert(ptls_set_user_timeout(tls, 
-					tcpls_options->timeoutval, tcpls_options->second, 0, 1) == 0);
-				assert(ptls_send_tcpoption(tls, &encbuf, USER_TIMEOUT)==0);
-				tcpls_options->timeout = 0;
-			}
-		}
-		settcpls_option = 1;
-	}
 
         do {
             FD_ZERO(&readfds);
@@ -320,85 +338,171 @@ Exit:
     ptls_buffer_dispose(&encbuf);
     ptls_buffer_dispose(&ptbuf);
     ptls_free(tls);
-
     return ret != 0;
 }
 
-static int run_server(struct sockaddr *sa, socklen_t salen, ptls_context_t *ctx, const char *input_file,
-                      ptls_handshake_properties_t *hsprop, int request_key_update, tcpls_t *tcpls, struct tcpls_options *tcpls_options)
+static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
+    *sa_peers, int nbr_ours, int nbr_peers, ptls_context_t *ctx, const char *input_file,
+    ptls_handshake_properties_t *hsprop, int request_key_update)
 {
-    int listen_fd, conn_fd, on = 1;
-    
-    if ((listen_fd = socket(sa->sa_family, SOCK_STREAM, 0)) == -1) {
+  int conn_fd, on = 1;
+  int listenfd[nbr_ours];
+  list_t *conn_tcpls = new_list(sizeof(struct conn_to_tcpls), 2);
+  socklen_t salen;
+  struct timeval timeout;
+  for (int i = 0; i < nbr_ours; i++) {
+    if (sa_ours[i].ss_family == AF_INET) {
+      if ((listenfd[i] = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
         perror("socket(2) failed");
         return 1;
+      }
     }
-    if (setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) != 0) {
-        perror("setsockopt(SO_REUSEADDR) failed");
+    else if (sa_ours[i].ss_family == AF_INET6) {
+      if ((listenfd[i] = socket(AF_INET6, SOCK_STREAM, 0)) == -1) {
+        perror("socket(2) failed");
         return 1;
+      }
     }
-    if (bind(listen_fd, sa, salen) != 0) {
-        perror("bind(2) failed");
-        return 1;
+    if (setsockopt(listenfd[i], SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) != 0) {
+      perror("setsockopt(SO_REUSEADDR) failed");
+      return 1;
     }
-    if (listen(listen_fd, SOMAXCONN) != 0) {
-        perror("listen(2) failed");
-        return 1;
-    }
-    if(ctx->support_tcpls_options)
-    	tcpls->socket_primary = listen_fd;
+    if (sa_ours[i].ss_family == AF_INET)
+      salen = sizeof(struct sockaddr_in);
+    else
+      salen = sizeof(struct sockaddr_in6);
 
-    fprintf(stderr, "server started on port %d\n", ntohs(((struct sockaddr_in *)sa)->sin_port));
+    if (bind(listenfd[i], (struct sockaddr*) &sa_ours[i], salen) != 0) {
+      perror("bind(2) failed");
+      return 1;
+    }
+    
+    if (listen(listenfd[i], SOMAXCONN) != 0) {
+      perror("listen(2) failed");
+      return 1;
+    }
+    /** For now, tcpls tests require nonblocking sockets compared to initial TLS
+     * tests*/
+    if (ctx->support_tcpls_options) {
+      make_nonblocking(listenfd[i]);
+    }
+  }
+
+  if (ctx->support_tcpls_options) {
     while (1) {
-        fprintf(stderr, "waiting for connections\n");
-        if ((conn_fd = accept(listen_fd, NULL, 0)) != -1)
-            handle_connection(conn_fd, ctx, NULL, input_file, hsprop, request_key_update, 0, tcpls, tcpls_options);
+      int maxfd = 0;
+      fd_set readset, writeset;
+      do {
+        timeout.tv_sec = 10;
+        FD_ZERO(&readset);
+        FD_ZERO(&writeset);
+        /** put all listeners in the read set */
+        for (int i = 0; i < nbr_ours; i++) {
+          FD_SET(listenfd[i], &readset);
+          if (maxfd < listenfd[i])
+            maxfd = listenfd[i];
+        }
+        /** put all tcpls connections within the read set, and the write set if
+         * they want to write */
+        for (int i = 0; i < conn_tcpls->size; i++) {
+          struct conn_to_tcpls *conn = list_get(conn_tcpls, i);
+          FD_SET(conn->conn_fd, &readset);
+          if (conn->wants_to_write)
+            FD_SET(conn->conn_fd, &writeset);
+          if (maxfd < listenfd[i])
+            maxfd = listenfd[i];
+        }
+      } while (select(maxfd, &readset, &writeset, NULL, &timeout) <= 0);
+      /** Check first we have a listen() connection */
+      int new_conn;
+      for (int i = 0; i < nbr_ours; i++) {
+        if (FD_ISSET(listenfd[i], &readset)) {
+          struct sockaddr_storage ss;
+          socklen_t slen = sizeof(ss);
+          new_conn = accept(listenfd[i], (struct sockaddr *)&ss, &slen);
+          if (new_conn < 0) {
+            perror("accept");
+          }
+          else if (new_conn > FD_SETSIZE)
+            close(new_conn);
+          else {
+            tcpls_t *new_tcpls = tcpls_new(ctx,  1);
+            struct conn_to_tcpls conntcpls;
+            conntcpls.conn_fd = new_conn;
+            conntcpls.wants_to_write = 0;
+            conntcpls.tcpls = new_tcpls;
+            /** ADD our ips */
+            tcpls_add_ips(new_tcpls, sa_ours, NULL, nbr_ours, 0);
+            list_add(conn_tcpls, &conntcpls);
+          }
+        }
+      }
+      /** Now Read data for all tcpls_t * that wants to read */
+      for (int i = 0; i < conn_tcpls->size; i++) {
+        struct conn_to_tcpls *conn = list_get(conn_tcpls, i);
+        if (FD_ISSET(conn->conn_fd, &readset)) {
+          handle_tcpls_read(conn->tcpls, conn->conn_fd);
+        }
+      }
+      /** Write data for all tcpls_t * that wants to write :-) */
+      for (int i = 0; i < conn_tcpls->size; i++) {
+        struct conn_to_tcpls *conn = list_get(conn_tcpls, i);
+        if (FD_ISSET(conn->conn_fd, &writeset)) {
+          handle_tcpls_write(conn->tcpls, conn->conn_fd);
+        }
+      }
     }
-
-    return 0;
+  }
+  else {
+    while (1) {
+      fprintf(stderr, "waiting for connections\n");
+      if ((conn_fd = accept(listenfd[0], NULL, 0)) != -1) {
+        handle_connection(conn_fd, ctx, NULL, input_file, hsprop, request_key_update, 0);
+      }
+    }
+  }
+  list_free(conn_tcpls);
+  return 0;
 }
 
-static int run_client(struct sockaddr *sa, socklen_t salen, ptls_context_t *ctx, const char *server_name, const char *input_file,
-                      ptls_handshake_properties_t *hsprop, int request_key_update, int keep_sender_open,  tcpls_t *tcpls, struct tcpls_options *tcpls_options)
+static int run_client(struct sockaddr_storage *sa_our, struct sockaddr_storage
+    *sa_peer, int nbr_our, int nbr_peer,  ptls_context_t *ctx, const char *server_name, const char
+    *input_file, ptls_handshake_properties_t *hsprop, int request_key_update,
+    int keep_sender_open)
 {
-    int fd;
+  int fd;
 
-    hsprop->client.esni_keys = resolve_esni_keys(server_name);
+  hsprop->client.esni_keys = resolve_esni_keys(server_name);
 
-    if(ctx->support_tcpls_options){
-	struct timeval timeout;
-	timeout.tv_sec = 150;
-        timeout.tv_usec = 0;
-	int err = tcpls_connect(tcpls->tls, NULL, NULL, &timeout);
-	if(err){
-		perror("tcpls_connect(2) failed");
-        	return 1;
-	}
-		
-	fd = tcpls->socket_primary ;
-    }
+  tcpls_t *tcpls = tcpls_new(ctx, 0);
+  tcpls_add_ips(tcpls, sa_our, sa_peer, nbr_our, nbr_peer);
+  struct timeval timeout;
+  timeout.tv_sec = 1;
+  timeout.tv_usec = 0;
+  int err = tcpls_connect(tcpls->tls, NULL, NULL, &timeout);
+  if (err){
+    perror("tcpls_connect(2) failed");
+    return 1;
+  }
 
-    else{
-
-
-    	if ((fd = socket(sa->sa_family, SOCK_STREAM, 0)) == 1) {
-        	perror("socket(2) failed");
-        	return 1;
-    	}
-    	if (connect(fd, sa, salen) != 0) {
-        	perror("connect(2) failed");
-        	return 1;
-    	}
-    }
-
-    int ret = handle_connection(fd, ctx, server_name, input_file, hsprop, request_key_update, keep_sender_open, tcpls, tcpls_options);
+  if (ctx->support_tcpls_options) {
+    int ret = handle_client_connection(tcpls);
     free(hsprop->client.esni_keys.base);
+    tcpls_free(tcpls);
     return ret;
+  }
+  else {
+    fd = tcpls->socket_primary;
+    int ret = handle_connection(fd, ctx, server_name, input_file, hsprop, request_key_update, keep_sender_open);
+    free(hsprop->client.esni_keys.base);
+    tcpls_free(tcpls);
+    return ret;
+  }
 }
 
 static void usage(const char *cmd)
 {
-    printf("Usage: %s [options] host port\n"
+  printf("Usage: %s [options] host port\n"
            "\n"
            "Options:\n"
            "  -4                   force IPv4\n"
@@ -443,327 +547,321 @@ static void usage(const char *cmd)
 
 int main(int argc, char **argv)
 {
-    ERR_load_crypto_strings();
-    OpenSSL_add_all_algorithms();
+  ERR_load_crypto_strings();
+  OpenSSL_add_all_algorithms();
 #if !defined(OPENSSL_NO_ENGINE)
-    /* Load all compiled-in ENGINEs */
-    ENGINE_load_builtin_engines();
-    ENGINE_register_all_ciphers();
-    ENGINE_register_all_digests();
+  /* Load all compiled-in ENGINEs */
+  ENGINE_load_builtin_engines();
+  ENGINE_register_all_ciphers();
+  ENGINE_register_all_digests();
 #endif
 
-    res_init();
+  res_init();
 
-    ptls_key_exchange_algorithm_t *key_exchanges[128] = {NULL};
-    ptls_cipher_suite_t *cipher_suites[128] = {NULL};
-    ptls_context_t ctx = {ptls_openssl_random_bytes, &ptls_get_time, key_exchanges, cipher_suites};
-    ptls_handshake_properties_t hsprop = {{{{NULL}}}};
-    const char *host, *port, *input_file = NULL, *esni_file = NULL;
-    struct {
-        ptls_key_exchange_context_t *elements[16];
-        size_t count;
-    } esni_key_exchanges;
-    int is_server = 0, use_early_data = 0, request_key_update = 0, keep_sender_open = 0, ch;
-    struct sockaddr_storage sa;
-    socklen_t salen;
-    int family = 0;
-    struct tcpls_options tcpls_options;
-    tcpls_t *tcpls;
-    char *addr1, *addr2;
+  ptls_key_exchange_algorithm_t *key_exchanges[128] = {NULL};
+  ptls_cipher_suite_t *cipher_suites[128] = {NULL};
+  ptls_context_t ctx = {ptls_openssl_random_bytes, &ptls_get_time, key_exchanges, cipher_suites};
+  ptls_handshake_properties_t hsprop = {{{{NULL}}}};
+  const char *host, *port, *input_file = NULL, *esni_file = NULL;
+  struct {
+    ptls_key_exchange_context_t *elements[16];
+    size_t count;
+  } esni_key_exchanges;
+  int is_server = 0, use_early_data = 0, request_key_update = 0, keep_sender_open = 0, ch;
+  /*struct sockaddr_storage sa;*/
+  socklen_t salen;
+  memset(&tcpls_options, 0, sizeof(tcpls_options));
+  tcpls_options.our_addrs = new_list(15*sizeof(char), 2);
+  tcpls_options.peer_addrs = new_list(15*sizeof(char), 2);
+  tcpls_options.our_addrs6 = new_list(39*sizeof(char), 2);
+  tcpls_options.peer_addrs6 = new_list(39*sizeof(char), 2);
+  int family = 0;
 
-    
-
-    while ((ch = getopt(argc, argv, "46abBC:c:i:Ik:nN:es:SE:K:l:y:vhtd:w:W:z:Z:")) != -1) {
-        switch (ch) {
-        case '4':
-            family = AF_INET;
-            break;
-        case '6':
-            family = AF_INET6;
-            break;
-        case 'a':
-            ctx.require_client_authentication = 1;
-            break;
-        case 'b':
+  while ((ch = getopt(argc, argv, "46abBC:c:i:Ik:nN:es:SE:K:l:y:vhtd:p:P:z:Z:")) != -1) {
+    switch (ch) {
+      case '4':
+        family = AF_INET;
+        break;
+      case '6':
+        family = AF_INET6;
+        break;
+      case 'a':
+        ctx.require_client_authentication = 1;
+        break;
+      case 'b':
 #if PICOTLS_USE_BROTLI
-            ctx.decompress_certificate = &ptls_decompress_certificate;
+        ctx.decompress_certificate = &ptls_decompress_certificate;
 #else
-            fprintf(stderr, "support for `-b` option was turned off during configuration\n");
-            exit(1);
+        fprintf(stderr, "support for `-b` option was turned off during configuration\n");
+        exit(1);
 #endif
-            break;
-        case 'B':
-            input_file = input_file_is_benchmark;
-            break;
-        case 'C':
-        case 'c':
-            if (ctx.certificates.count != 0) {
-                fprintf(stderr, "-C/-c can only be specified once\n");
-                return 1;
-            }
-            load_certificate_chain(&ctx, optarg);
-            is_server = ch == 'c';
-            break;
-        case 'i':
-            input_file = optarg;
-            break;
-        case 'I':
-            keep_sender_open = 1;
-            break;
-        case 'k':
-            load_private_key(&ctx, optarg);
-            break;
-        case 'n':
-            hsprop.client.negotiate_before_key_exchange = 1;
-            break;
-        case 'e':
-            use_early_data = 1;
-            break;
-        case 's':
-            setup_session_file(&ctx, &hsprop, optarg);
-            break;
-        case 'S':
-            ctx.require_dhe_on_psk = 1;
-            break;
-        case 'E':
-            esni_file = optarg;
-            break;
-        case 'K': {
-            FILE *fp;
-            EVP_PKEY *pkey;
-            int ret;
-            if ((fp = fopen(optarg, "rt")) == NULL) {
-                fprintf(stderr, "failed to open ESNI private key file:%s:%s\n", optarg, strerror(errno));
-                return 1;
-            }
-            if ((pkey = PEM_read_PrivateKey(fp, NULL, NULL, NULL)) == NULL) {
-                fprintf(stderr, "failed to load private key from file:%s\n", optarg);
-                return 1;
-            }
-            if ((ret = ptls_openssl_create_key_exchange(esni_key_exchanges.elements + esni_key_exchanges.count++, pkey)) != 0) {
-                fprintf(stderr, "failed to load private key from file:%s:picotls-error:%d", optarg, ret);
-                return 1;
-            }
-            EVP_PKEY_free(pkey);
-            fclose(fp);
-        } break;
-        case 'l':
-            setup_log_event(&ctx, optarg);
-            break;
-        case 'v':
-            setup_verify_certificate(&ctx);
-            break;
-        case 'N': {
-            ptls_key_exchange_algorithm_t *algo = NULL;
+        break;
+      case 'B':
+        input_file = input_file_is_benchmark;
+        break;
+      case 'C':
+      case 'c':
+        if (ctx.certificates.count != 0) {
+          fprintf(stderr, "-C/-c can only be specified once\n");
+          return 1;
+        }
+        load_certificate_chain(&ctx, optarg);
+        is_server = ch == 'c';
+        break;
+      case 'i':
+        input_file = optarg;
+        break;
+      case 'I':
+        keep_sender_open = 1;
+        break;
+      case 'k':
+        load_private_key(&ctx, optarg);
+        break;
+      case 'n':
+        hsprop.client.negotiate_before_key_exchange = 1;
+        break;
+      case 'e':
+        use_early_data = 1;
+        break;
+      case 's':
+        setup_session_file(&ctx, &hsprop, optarg);
+        break;
+      case 'S':
+        ctx.require_dhe_on_psk = 1;
+        break;
+      case 'E':
+        esni_file = optarg;
+        break;
+      case 'K': {
+                  FILE *fp;
+                  EVP_PKEY *pkey;
+                  int ret;
+                  if ((fp = fopen(optarg, "rt")) == NULL) {
+                    fprintf(stderr, "failed to open ESNI private key file:%s:%s\n", optarg, strerror(errno));
+                    return 1;
+                  }
+                  if ((pkey = PEM_read_PrivateKey(fp, NULL, NULL, NULL)) == NULL) {
+                    fprintf(stderr, "failed to load private key from file:%s\n", optarg);
+                    return 1;
+                  }
+                  if ((ret = ptls_openssl_create_key_exchange(esni_key_exchanges.elements + esni_key_exchanges.count++, pkey)) != 0) {
+                    fprintf(stderr, "failed to load private key from file:%s:picotls-error:%d", optarg, ret);
+                    return 1;
+                  }
+                  EVP_PKEY_free(pkey);
+                  fclose(fp);
+                } break;
+      case 'l':
+                setup_log_event(&ctx, optarg);
+                break;
+      case 'v':
+                setup_verify_certificate(&ctx);
+                break;
+      case 'N': {
+                  ptls_key_exchange_algorithm_t *algo = NULL;
 #define MATCH(name)                                                                                                                \
-    if (algo == NULL && strcasecmp(optarg, #name) == 0)                                                                            \
-    algo = (&ptls_openssl_##name)
-            MATCH(secp256r1);
+                  if (algo == NULL && strcasecmp(optarg, #name) == 0)                                                                            \
+                  algo = (&ptls_openssl_##name)
+                  MATCH(secp256r1);
 #if PTLS_OPENSSL_HAVE_SECP384R1
-            MATCH(secp384r1);
+                  MATCH(secp384r1);
 #endif
 #if PTLS_OPENSSL_HAVE_SECP521R1
-            MATCH(secp521r1);
+                  MATCH(secp521r1);
 #endif
 #if PTLS_OPENSSL_HAVE_X25519
-            MATCH(x25519);
+                  MATCH(x25519);
 #endif
 #undef MATCH
-            if (algo == NULL) {
-                fprintf(stderr, "could not find key exchange: %s\n", optarg);
-                return 1;
-            }
-            size_t i;
-            for (i = 0; key_exchanges[i] != NULL; ++i)
-                ;
-            key_exchanges[i++] = algo;
-        } break;
-        case 'u':
-            request_key_update = 1;
-            break;
-        case 'y': {
-            size_t i;
-            for (i = 0; cipher_suites[i] != NULL; ++i)
-                ;
+                  if (algo == NULL) {
+                    fprintf(stderr, "could not find key exchange: %s\n", optarg);
+                    return 1;
+                  }
+                  size_t i;
+                  for (i = 0; key_exchanges[i] != NULL; ++i)
+                    ;
+                  key_exchanges[i++] = algo;
+                } break;
+      case 'u':
+                request_key_update = 1;
+                break;
+      case 'y': {
+                  size_t i;
+                  for (i = 0; cipher_suites[i] != NULL; ++i)
+                    ;
 #define MATCH(name)                                                                                                                \
-    if (cipher_suites[i] == NULL && strcasecmp(optarg, #name) == 0)                                                                \
-    cipher_suites[i] = &ptls_openssl_##name
-            MATCH(aes128gcmsha256);
-            MATCH(aes256gcmsha384);
+                  if (cipher_suites[i] == NULL && strcasecmp(optarg, #name) == 0)                                                                \
+                  cipher_suites[i] = &ptls_openssl_##name
+                  MATCH(aes128gcmsha256);
+                  MATCH(aes256gcmsha384);
 #if PTLS_OPENSSL_HAVE_CHACHA20_POLY1305
-            MATCH(chacha20poly1305sha256);
+                  MATCH(chacha20poly1305sha256);
 #endif
 #undef MATCH
-            if (cipher_suites[i] == NULL) {
-                fprintf(stderr, "unknown cipher-suite: %s\n", optarg);
+                  if (cipher_suites[i] == NULL) {
+                    fprintf(stderr, "unknown cipher-suite: %s\n", optarg);
+                    exit(1);
+                  }
+                } break;
+      case 'h':
+                usage(argv[0]);
+                exit(0);
+      case 't':
+                ctx.support_tcpls_options = 1;
+                break;
+
+      case 'd':
+                if(sscanf(optarg, "%d %d", &tcpls_options.timeoutval, &tcpls_options.is_second) < 0){
+                  usage(argv[0]);
+                  exit(0);
+                }
+                tcpls_options.timeout = 1;
+                break;
+      case 'p':
+                if (strlen(optarg) != 15)  {
+                  fprintf(stderr, "Uncorrect v4 addr: %s\n", optarg);
+                  exit(1);
+                }
+                if (!tcpls_options.peer_addrs)
+                  tcpls_options.peer_addrs = new_list(15*sizeof(char), 2);
+                list_add(tcpls_options.peer_addrs, optarg);
+                break;
+      case 'P':
+                if (strlen(optarg) != 39)  {
+                  fprintf(stderr, "Uncorrect v6 addr: %s\n", optarg);
+                  exit(1);
+                }
+                if (!tcpls_options.peer_addrs)
+                  tcpls_options.peer_addrs6 = new_list(39*sizeof(char), 2);
+                list_add(tcpls_options.peer_addrs6, optarg);
+                break;
+
+      case 'z':
+                if (strlen(optarg) != 15)  {
+                  fprintf(stderr, "Uncorrect v4 addr: %s\n", optarg);
+                  exit(1);
+                }
+                if (!tcpls_options.our_addrs)
+                  tcpls_options.our_addrs = new_list(15*sizeof(char), 2);
+                list_add(tcpls_options.our_addrs, optarg);
+                break;
+      case 'Z':
+                if (strlen(optarg) != 39)  {
+                  fprintf(stderr, "Uncorrect v6 addr: %s\n", optarg);
+                  exit(1);
+                }
+                if (!tcpls_options.our_addrs6)
+                  tcpls_options.our_addrs6 = new_list(39*sizeof(char), 2);
+                list_add(tcpls_options.our_addrs, optarg);
+                break;
+      default:
                 exit(1);
-            }
-        } break;
-        case 'h':
-            usage(argv[0]);
-            exit(0);
-	case 't':
-		ctx.support_tcpls_options = 1;
-		break;
-
-        case 'd':
-		if(sscanf(optarg, "%d %d", 
-			&tcpls_options.timeoutval, &tcpls_options.second) < 0){
-			usage(argv[0]);
-            		exit(0);
-		}
-		tcpls_options.timeout = 1;
-		break;
-	case 'w':
-		addr1 = malloc(sizeof(char)*15);
-		addr2 = malloc(sizeof(char)*15);
-		addr1 = strtok(optarg, ",");
-		addr2 = strtok(NULL, ",");
-		if(addr1!=NULL){
-			if(inet_pton(AF_INET, addr1, &tcpls_options.addr.sin_addr)!=1){
-				usage(argv[0]);
-            			exit(0);
-			}
-			tcpls_options.v4_1 = 1;
-		}
-		if(addr2!=NULL){
-			if(inet_pton(AF_INET, addr2, &tcpls_options.addr2.sin_addr)!=1){
-				usage(argv[0]);
-            			exit(0);
-			}
-			tcpls_options.v4_2 = 1;
-		}
-		break;
-
-	case 'W':
-		if(inet_pton(AF_INET6, optarg, &tcpls_options.addr6.sin6_addr)!=1){
-			usage(argv[0]);
-            		exit(0);
-		}
-		tcpls_options.v6 = 1;
-		break;
-
-	case 'z':
-		if(inet_pton(AF_INET, optarg, &tcpls_options.ours_addr.sin_addr)!=1){
-			usage(argv[0]);
-            		exit(0);
-		}
-		tcpls_options.ours_v4 = 1;
-		break;
-
-	case 'Z':
-		if(inet_pton(AF_INET6, optarg, &tcpls_options.ours_addr6.sin6_addr)!=1){
-			usage(argv[0]);
-            		exit(0);
-		}
-		tcpls_options.ours_v6 = 1;
-		break;
-        default:
-            exit(1);
-        }
     }
-    argc -= optind;
-    argv += optind;
-    if ((ctx.certificates.count == 0) != (ctx.sign_certificate == NULL)) {
-        fprintf(stderr, "-C/-c and -k options must be used together\n");
-        return 1;
+  }
+  argc -= optind;
+  argv += optind;
+  if ((ctx.certificates.count == 0) != (ctx.sign_certificate == NULL)) {
+    fprintf(stderr, "-C/-c and -k options must be used together\n");
+    return 1;
+  }
+  if (is_server) {
+    if (ctx.certificates.count == 0) {
+      fprintf(stderr, "-c and -k options must be set\n");
+      return 1;
     }
-    if (is_server) {
-        if (ctx.certificates.count == 0) {
-            fprintf(stderr, "-c and -k options must be set\n");
-            return 1;
-        }
 #if PICOTLS_USE_BROTLI
-        if (ctx.decompress_certificate != NULL) {
-            static ptls_emit_compressed_certificate_t ecc;
-            if (ptls_init_compressed_certificate(&ecc, ctx.certificates.list, ctx.certificates.count, ptls_iovec_init(NULL, 0)) !=
-                0) {
-                fprintf(stderr, "failed to create a brotli-compressed version of the certificate chain.\n");
-                exit(1);
-            }
-            ctx.emit_certificate = &ecc.super;
-        }
-#endif
-        setup_session_cache(&ctx);
-    } else {
-        /* client */
-        if (use_early_data) {
-            static size_t max_early_data_size;
-            hsprop.client.max_early_data_size = &max_early_data_size;
-        }
-        ctx.send_change_cipher_spec = 1;
-    }
-    if (key_exchanges[0] == NULL)
-        key_exchanges[0] = &ptls_openssl_secp256r1;
-    if (cipher_suites[0] == NULL) {
-        size_t i;
-        for (i = 0; ptls_openssl_cipher_suites[i] != NULL; ++i)
-            cipher_suites[i] = ptls_openssl_cipher_suites[i];
-    }
-    if (esni_file != NULL) {
-        if (esni_key_exchanges.count == 0) {
-            fprintf(stderr, "-E must be used together with -K\n");
-            return 1;
-        }
-        setup_esni(&ctx, esni_file, esni_key_exchanges.elements);
-    }
-    if (argc != 2) {
-        fprintf(stderr, "missing host and port\n");
-        return 1;
-    }
-    host = (--argc, *argv++);
-    port = (--argc, *argv++);
-
-    if (resolve_address((struct sockaddr *)&sa, &salen, host, port, family, SOCK_STREAM, IPPROTO_TCP) != 0)
+    if (ctx.decompress_certificate != NULL) {
+      static ptls_emit_compressed_certificate_t ecc;
+      if (ptls_init_compressed_certificate(&ecc, ctx.certificates.list, ctx.certificates.count, ptls_iovec_init(NULL, 0)) !=
+          0) {
+        fprintf(stderr, "failed to create a brotli-compressed version of the certificate chain.\n");
         exit(1);
-   
-    if(ctx.support_tcpls_options){
-	tcpls = tcpls_new(&ctx, is_server);
-        if(tcpls_options.ours_v4){
-		tcpls_options.ours_addr.sin_port = htons(atoi(port));
-		tcpls_options.ours_addr.sin_family = AF_INET;
-		if(tcpls_add_v4(tcpls->tls, &tcpls_options.ours_addr, 1, 0, 1))
-			exit(1);	
-		assert(tcpls->ours_v4_addr_llist);
-		assert(tcpls->ours_v4_addr_llist->is_primary == 1);
-	}
-
-	if(tcpls_options.ours_v6){
-		tcpls_options.ours_addr6.sin6_port = htons(atoi(port));
-		tcpls_options.ours_addr6.sin6_family = AF_INET6;
-		if(tcpls_add_v6(tcpls->tls, &tcpls_options.ours_addr6, 1, 0, 1))
-			exit(1);	
-		assert(tcpls->ours_v6_addr_llist);
-		assert(tcpls->ours_v6_addr_llist->is_primary == 1);
-	}
-
-	if(tcpls_options.v4_1){
-		tcpls_options.addr.sin_port = htons(atoi(port));
-		tcpls_options.addr.sin_family = AF_INET;
-		if(tcpls_add_v4(tcpls->tls, &tcpls_options.addr, 0, 1, 0))
-			exit(1);
-		tcpls_options.v4_1 = 0;
-	}
-	if(tcpls_options.v4_2){
-		tcpls_options.addr2.sin_port = htons(atoi(port));
-		tcpls_options.addr2.sin_family = AF_INET;
-		if(tcpls_add_v4(tcpls->tls, &tcpls_options.addr2, 0, 1, 0))
-			exit(1);
-		tcpls_options.v4_2 = 0;
-	}
-	if(tcpls_options.v6){
-		tcpls_options.addr6.sin6_port = htons(atoi(port));
-		tcpls_options.addr6.sin6_family = AF_INET6;
-		if(tcpls_add_v6(tcpls->tls, &tcpls_options.addr6, 0, 1, 0))
-			exit(1);
-		tcpls_options.v6 = 0;
-	}
+      }
+      ctx.emit_certificate = &ecc.super;
     }
-
-   
-    if (is_server) {
-        return run_server((struct sockaddr *)&sa, salen, &ctx, input_file, &hsprop, request_key_update, tcpls, &tcpls_options);
-    } else {
-        return run_client((struct sockaddr *)&sa, salen, &ctx, host, input_file, &hsprop, request_key_update, keep_sender_open, tcpls, &tcpls_options);
+#endif
+    setup_session_cache(&ctx);
+  } else {
+    /* client */
+    if (use_early_data) {
+      static size_t max_early_data_size;
+      hsprop.client.max_early_data_size = &max_early_data_size;
     }
+    ctx.send_change_cipher_spec = 1;
+  }
+  if (key_exchanges[0] == NULL)
+    key_exchanges[0] = &ptls_openssl_secp256r1;
+  if (cipher_suites[0] == NULL) {
+    size_t i;
+    for (i = 0; ptls_openssl_cipher_suites[i] != NULL; ++i)
+      cipher_suites[i] = ptls_openssl_cipher_suites[i];
+  }
+  if (esni_file != NULL) {
+    if (esni_key_exchanges.count == 0) {
+      fprintf(stderr, "-E must be used together with -K\n");
+      return 1;
+    }
+    setup_esni(&ctx, esni_file, esni_key_exchanges.elements);
+  }
+  if (argc != 2) {
+    fprintf(stderr, "missing host and port\n");
+    return 1;
+  }
+  host = (--argc, *argv++);
+  port = (--argc, *argv++);
+  int nbr_our_addrs, nbr_peer_addrs, offset;
+  offset = 0;
+  if (is_server) {
+    nbr_our_addrs = tcpls_options.our_addrs->size + tcpls_options.our_addrs6->size + 1;
+    nbr_peer_addrs = tcpls_options.peer_addrs->size + tcpls_options.peer_addrs6->size;
+  }
+  else {
+    nbr_our_addrs = tcpls_options.our_addrs->size + tcpls_options.our_addrs6->size;
+    nbr_peer_addrs = tcpls_options.peer_addrs->size + tcpls_options.peer_addrs6->size+1;
+  }
+  struct sockaddr_storage sa_ours[nbr_our_addrs];
+  struct sockaddr_storage sa_peer[nbr_peer_addrs];
+
+  char *addr;
+  for (int i = 0; i < tcpls_options.our_addrs->size; i++) {
+    addr = list_get(tcpls_options.our_addrs, i);
+    if (resolve_address((struct sockaddr *)&sa_ours[i], &salen, addr, port, AF_INET, SOCK_STREAM, IPPROTO_TCP) != 0)
+      exit(1);
+  }
+  offset += tcpls_options.our_addrs->size;
+  for (int i = 0; i < tcpls_options.our_addrs6->size; i++) {
+    addr = list_get(tcpls_options.our_addrs6, i);
+    if (resolve_address((struct sockaddr *)&sa_ours[i+offset], &salen, addr, port, AF_INET6, SOCK_STREAM, IPPROTO_TCP) != 0)
+      exit(1);
+  }
+  offset = 0;
+  for (int i = 0; i < tcpls_options.peer_addrs->size; i++) {
+    addr = list_get(tcpls_options.peer_addrs, i);
+    if (resolve_address((struct sockaddr *)&sa_peer[i], &salen, addr, port, AF_INET, SOCK_STREAM, IPPROTO_TCP) != 0)
+      exit(1);
+  }
+  offset += tcpls_options.peer_addrs->size;
+  for (int i = 0; i < tcpls_options.peer_addrs6->size; i++) {
+    addr = list_get(tcpls_options.peer_addrs6, i);
+    if (resolve_address((struct sockaddr *)&sa_peer[i+offset], &salen, addr, port, AF_INET6, SOCK_STREAM, IPPROTO_TCP) != 0)
+      exit(1);
+  }
+  /**  resolve the host line -- keep it for backward compatibility */
+  struct sockaddr *sockaddr_ptr;
+  if (is_server) {
+    sockaddr_ptr = (struct sockaddr*) &sa_ours[nbr_our_addrs-1];
+  }
+  else {
+    sockaddr_ptr = (struct sockaddr*) &sa_peer[nbr_peer_addrs-1];
+  }
+  if (resolve_address(sockaddr_ptr, &salen, host, port,
+        family, SOCK_STREAM, IPPROTO_TCP) != 0) 
+    exit(1);
+
+
+  if (is_server) {
+    return run_server(sa_ours, sa_peer, nbr_our_addrs, nbr_peer_addrs, &ctx, input_file, &hsprop, request_key_update);
+  } else {
+    return run_client(sa_ours, sa_peer, nbr_our_addrs, nbr_peer_addrs, &ctx, host, input_file, &hsprop, request_key_update, keep_sender_open);
+  }
 }

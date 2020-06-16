@@ -315,14 +315,14 @@ int tcpls_connect(ptls_t *tls, struct sockaddr *src, struct sockaddr *dest,
     tcpls_v4_addr_t *ours_current_v4 = tcpls->ours_v4_addr_llist;
     tcpls_v6_addr_t *current_v6 = tcpls->v6_addr_llist;
     tcpls_v6_addr_t *ours_current_v6 = tcpls->ours_v6_addr_llist;
-    while (ours_current_v4 || ours_current_v6) {
-      while (current_v4 || current_v6) {
-        if (ours_current_v4 && current_v4) {
+    while (current_v4 || current_v6) {
+      do {
+        if (current_v4) {
           if (handle_connect(tcpls, ours_current_v4, current_v4, NULL, NULL, AF_INET, &nfds, &maxfds, &coninfo, &wset) < 0) {
             return -1;
           }
         }
-        if (ours_current_v6 && current_v6) {
+        if (current_v6) {
           if(handle_connect(tcpls, NULL, NULL, ours_current_v6, current_v6, AF_INET6, &nfds, &maxfds, &coninfo, &wset) < 0) {
             return -1;
           }
@@ -332,7 +332,7 @@ int tcpls_connect(ptls_t *tls, struct sockaddr *src, struct sockaddr *dest,
           current_v4 = current_v4->next;
         if (current_v6)
           current_v6 = current_v6->next;
-      }
+      } while (ours_current_v4 || ours_current_v6);
       if (ours_current_v4)
         ours_current_v4 = ours_current_v4->next;
       if (ours_current_v6)
@@ -1167,7 +1167,9 @@ static int handle_connect(tcpls_t *tcpls, tcpls_v4_addr_t *src, tcpls_v4_addr_t
       coninfo->dest = dest;
       coninfo->src6 = NULL;
       coninfo->dest6 = NULL;
-      if (src->is_primary && dest->is_primary)
+      if ((src && src->is_primary) && dest->is_primary)
+        coninfo->is_primary = 1;
+      else if (!src && dest->is_primary)
         coninfo->is_primary = 1;
     }
     else {
@@ -1175,7 +1177,9 @@ static int handle_connect(tcpls_t *tcpls, tcpls_v4_addr_t *src, tcpls_v4_addr_t
       coninfo->dest6 = dest6;
       coninfo->src = NULL;
       coninfo->dest = NULL;
-      if (src6->is_primary && dest6->is_primary)
+      if ((src6 && src6->is_primary) && dest6->is_primary)
+        coninfo->is_primary = 1;
+      else if (!src6 && dest6->is_primary)
         coninfo->is_primary = 1;
     }
   }
@@ -1501,7 +1505,7 @@ int handle_tcpls_record(ptls_t *tls, struct st_ptls_record_t *rec)
     }
     memset(tls->tcpls_buf, 0, sizeof(*tls->tcpls_buf));
   }
-  
+
   type = (tcpls_enum_t) *rec->fragment;
   /** Check whether type is a variable len option */
   if (is_varlen(type)){
@@ -1810,6 +1814,7 @@ static void _set_primary(tcpls_t *tcpls) {
   int has_primary = 0;
   connect_info_t *con, *primary_con;
   primary_con = list_get(tcpls->connect_infos, 0);
+  assert(primary_con);
   for (int i = 0; i < tcpls->connect_infos->size; i++) {
     con = list_get(tcpls->connect_infos, i);
     if (con->is_primary) {
