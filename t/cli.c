@@ -110,7 +110,23 @@ static void tcpls_add_ips(tcpls_t *tcpls, struct sockaddr_storage *sa_our,
       tcpls_add_v6(tcpls->tls, (struct sockaddr_in6*)&sa_peer[i], 0, 0, 0);
   }
 }
-static  int handle_tcpls_read(tcpls_t *tcpls, int socket) {
+static int handle_tcpls_read(tcpls_t *tcpls, int socket) {
+
+  int ret;
+  if (!ptls_handshake_is_complete(tcpls->tls)) {
+    ptls_handshake_properties_t prop = {NULL};
+    prop.socket = socket;
+    if ((ret = tcpls_handshake(tcpls->tls, &prop)) != 0) {
+      fprintf(stderr, "tcpls_handshake failed with ret %d\n", ret);
+    }
+    return 0;
+  }
+  char buf[16384];
+  if ((ret = tcpls_receive(tcpls->tls, buf, 16384, NULL)) <  0) {
+    fprintf(stderr, "tcpls_receive returned %d",ret);
+    return -1;
+  }
+  write(1, buf, ret);
   return 0;
 }
 
@@ -118,7 +134,16 @@ static int handle_tcpls_write(tcpls_t *tcpls, int socket) {
   return 0;
 }
 
+static int handle_server_connection(tcpls_t *tcpls) {
+
+  return 0;
+}
+  
 static int handle_client_connection(tcpls_t *tcpls) {
+  /** handshake*/
+  handle_tcpls_read(tcpls, 0);
+  char input[6] = "coucou";
+  tcpls_send(tcpls->tls, 0, input, 6);
   return 0;
 }
 
@@ -393,7 +418,7 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
       int maxfd = 0;
       fd_set readset, writeset;
       do {
-        timeout.tv_sec = 10;
+        timeout.tv_sec = 100;
         FD_ZERO(&readset);
         FD_ZERO(&writeset);
         /** put all listeners in the read set */
@@ -409,23 +434,24 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
           FD_SET(conn->conn_fd, &readset);
           if (conn->wants_to_write)
             FD_SET(conn->conn_fd, &writeset);
-          if (maxfd < listenfd[i])
-            maxfd = listenfd[i];
+          if (maxfd < conn->conn_fd)
+            maxfd = conn->conn_fd;
         }
-      } while (select(maxfd, &readset, &writeset, NULL, &timeout) <= 0);
+        fprintf(stderr, "waiting for connection or r/w event...\n");
+      } while (select(maxfd+1, &readset, &writeset, NULL, &timeout) <= 0);
       /** Check first we have a listen() connection */
-      int new_conn;
       for (int i = 0; i < nbr_ours; i++) {
         if (FD_ISSET(listenfd[i], &readset)) {
           struct sockaddr_storage ss;
           socklen_t slen = sizeof(ss);
-          new_conn = accept(listenfd[i], (struct sockaddr *)&ss, &slen);
+          int new_conn = accept(listenfd[i], (struct sockaddr *)&ss, &slen);
           if (new_conn < 0) {
             perror("accept");
           }
           else if (new_conn > FD_SETSIZE)
             close(new_conn);
           else {
+            fprintf(stderr, "Accepting a new connection\n");
             tcpls_t *new_tcpls = tcpls_new(ctx,  1);
             struct conn_to_tcpls conntcpls;
             conntcpls.conn_fd = new_conn;

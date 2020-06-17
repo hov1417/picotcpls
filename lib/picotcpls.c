@@ -481,16 +481,16 @@ int tcpls_handshake(ptls_t *tls, ptls_handshake_properties_t *properties) {
   if (!tcpls)
     return -1;
   int socket = 0;
+  /** set the handshake socket */
+  if (properties && !socket) {
+    socket = properties->socket;
+  }
   /** Get the right socket */
   if (!tls->is_server && !socket) {
     connect_info_t *con = get_primary_con_info(tcpls);
     if (!con)
       goto Exit;
     socket = con->socket;
-  }
-  /** set the handshake socket */
-  if (properties && !socket) {
-    socket = properties->socket;
   }
   ssize_t rret;
   int ret;
@@ -500,8 +500,10 @@ int tcpls_handshake(ptls_t *tls, ptls_handshake_properties_t *properties) {
   if (!tls->is_server && (ret = ptls_handshake(tls, &sendbuf, NULL, NULL, properties)) == PTLS_ERROR_IN_PROGRESS) {
     rret = 0;
     while (rret < sendbuf.off) {
-      if ((ret = send(socket, sendbuf.base, sendbuf.off, 0)) < 0)
-          goto Exit;
+      if ((ret = send(socket, sendbuf.base, sendbuf.off, 0)) < 0) {
+        perror("send(2) failed"); 
+        goto Exit;
+      }
       rret += ret;
     }
     if (properties && properties->client.mpjoin) {
@@ -526,7 +528,8 @@ int tcpls_handshake(ptls_t *tls, ptls_handshake_properties_t *properties) {
       roff += consumed;
       if ((ret == 0 || ret == PTLS_ERROR_IN_PROGRESS) && sendbuf.off != 0) {
         if ((rret = send(socket, sendbuf.base, sendbuf.off, 0)) < 0) {
-           goto Exit;
+          perror("send(2) failed");
+          goto Exit;
         }
       }
       ptls_buffer_dispose(&sendbuf);
@@ -541,14 +544,65 @@ Exit:
 
 /**
  * Server-side function called when the server knows it needs to attach a TCP
- * connection to a given tcpls_t session.
+ * connection to a given tcpls_t session. It may be a MPJOIN TCP connection or
+ * the primary connection. In case of the primary connection, the cookie is set
+ * to NULL
  *
- * This function check whether the received cookie is valid. If it is, it
- * creates a new connection and trigger a callback, marking this con usable to
- * attach streams.
+ * If this is a MPJOIN, this function check whether the received cookie is
+ * valid. If it is, it creates a new connection and trigger a callback, marking
+ * this con usable to attach streams.
+ *
+ * returns -1 upon error, and 0 if succeeded
  */
 
-int tcpls_mpjoin_accept(tcpls_t *tcpls, int socket, uint8_t *cookie) {
+int tcpls_accept(tcpls_t *tcpls, int socket, uint8_t *cookie) {
+  /** check whether this socket has been already added */
+  connect_info_t *conn = get_con_info_from_socket(tcpls, socket);
+  if (conn)
+    return 0;
+  if (cookie) {
+    char* cookie_in = list_get(tcpls->cookies, tcpls->cookies->size-1);
+    if (!memcmp(cookie, cookie_in, 128)) {
+      list_remove(tcpls->cookies, cookie_in);
+    }
+    else {
+      /** Cookie unvalid */
+      return -1;
+    }
+  }
+  struct sockaddr_storage ss;
+  socklen_t sslen = sizeof(struct sockaddr_storage);
+  memset(&ss, 0, sslen);
+  connect_info_t newconn;
+  memset(&newconn, 0, sizeof(connect_info_t));
+  newconn.state = CONNECTED;
+  if (getsockname(socket, (struct sockaddr *) &ss, &sslen) < 0) {
+    perror("getsockname(2) failed");
+  }
+  /** retrieve the correct addr */
+  if (ss.ss_family == AF_INET) {
+    tcpls_v4_addr_t *v4 = tcpls->ours_v4_addr_llist;
+    while(v4) {
+      if (!memcmp(&v4->addr, (struct sockaddr_in*) &ss, sizeof(struct sockaddr_in)))
+        break;
+      v4 = v4->next;
+    }
+    if (!v4)
+      return -1;
+    newconn.src = v4;
+  }
+  else if (ss.ss_family == AF_INET6) {
+    tcpls_v6_addr_t *v6 = tcpls->ours_v6_addr_llist;
+    while (v6) {
+      if (!memcmp(&v6->addr, (struct sockaddr_in6*) &ss, sizeof(struct sockaddr_in6)))
+        break;
+      v6 = v6->next;
+    }
+    if (!v6)
+      return -1;
+    newconn.src6 = v6;
+  }
+  list_add(tcpls->connect_infos, &newconn);
   return 0;
 }
 
@@ -837,6 +891,8 @@ ssize_t tcpls_send(ptls_t *tls, streamid_t streamid, const void *input, size_t n
   tcpls->tls->traffic_protection.enc.aead = remember_aead;
   switch (ret) {
     /** Error in encryption -- TODO document the possibilties */
+    case 0:
+      break;
     default: return ret;
   }
   /** Send over the socket's stream */
@@ -930,12 +986,15 @@ ssize_t tcpls_receive(ptls_t *tls, void *buf, size_t nbytes, struct timeval *tv)
   list_t *socklist = new_list(sizeof(int), tcpls->nbr_tcp_streams);
   FD_ZERO(&rset);
   connect_info_t *con;
+  int maxfd = 0;
   for (int i = 0; i < tcpls->connect_infos->size; i++) {
     con = list_get(tcpls->connect_infos, i);
     list_add(socklist, &con->socket);
     FD_SET(con->socket, &rset);
+    if (maxfd < con->socket)
+      maxfd = con->socket;
   }
-  ret = select(socklist->size+1, &rset, NULL, NULL, tv);
+  ret = select(maxfd+1, &rset, NULL, NULL, tv);
   if (ret == -1) {
     list_free(socklist);
     return -1;
@@ -944,58 +1003,58 @@ ssize_t tcpls_receive(ptls_t *tls, void *buf, size_t nbytes, struct timeval *tv)
   ret = 0;
   uint8_t input[nbytes];
   for (int i =  0; i < socklist->size; i++) {
-     socket = list_get(socklist, i);
-     if (FD_ISSET(*socket, &rset)) {
-       ret = recv(*socket, input, nbytes, 0);
-       if (ret == -1) {
-         list_free(socklist);
-         if (errno == ECONNRESET) {
-           /** TODO need to update the timer */
-           ret = tcpls_receive(tls, buf, nbytes, tv);
-         }
-         return ret;
-         }
-       else if (ret == 0) {
-         list_free(socklist);
-       }
-       break;
-     }
-  }
-  tcpls->socket_rcv = *socket;
-  /* We have stuff to decrypts */
-  if (ret > 0) {
-    ptls_buffer_t decryptbuf;
-    ptls_buffer_init(&decryptbuf, "", ret);
-    int rret = 1;
-    list_t *streams_ptr = get_streams_from_socket(tcpls, tcpls->socket_rcv);
-    for (int i = 0; i < streams_ptr->size && rret; i++) {
-      tcpls_stream_t *stream = list_get(streams_ptr, i);
-      if (!stream)
-        return -1;
+    socket = list_get(socklist, i);
+    if (FD_ISSET(*socket, &rset)) {
+      ret = recv(*socket, input, nbytes, 0);
+      if (ret == -1) {
+        list_free(socklist);
+        if (errno == ECONNRESET) {
+          /** TODO next packets may need discarded? Or send an ack and wait! */
+          /*ret = tcpls_receive(tls, buf, nbytes, tv);*/
+        }
+        return ret;
+      }
+      else if (ret == 0) {
+        list_free(socklist);
+        return ret;
+      }
+      tcpls->socket_rcv = *socket;
+      /* We have stuff to decrypts */
+      if (ret > 0) {
+        ptls_buffer_t decryptbuf;
+        ptls_buffer_init(&decryptbuf, "", ret);
+        int rret = 1;
+        list_t *streams_ptr = get_streams_from_socket(tcpls, tcpls->socket_rcv);
+        for (int i = 0; i < streams_ptr->size && rret; i++) {
+          tcpls_stream_t **stream = list_get(streams_ptr, i);
 
-      ptls_aead_context_t *remember_aead = tcpls->tls->traffic_protection.dec.aead;
-      // get the right  aead context matching the stream id
-      // This is done for compabitility with original PTLS's unit tests
-      tcpls->tls->traffic_protection.dec.aead = stream->aead_dec;
-      size_t input_off = 0;
-      size_t input_size = ret;
-      size_t consumed;
-      do  {
-        consumed = input_size - input_off;
-        rret = ptls_receive(tls, &decryptbuf, input + input_off, &consumed);
-        input_off += consumed;
-      } while (rret == 0 && input_off < input_size);
+          ptls_aead_context_t *remember_aead = tcpls->tls->traffic_protection.dec.aead;
+          // get the right  aead context matching the stream id
+          // This is done for compabitility with original PTLS's unit tests
+          /** We possible have not stream attached server-side */
+          if (stream)
+            tcpls->tls->traffic_protection.dec.aead = (*stream)->aead_dec;
+          size_t input_off = 0;
+          size_t input_size = ret;
+          size_t consumed;
+          do {
+            consumed = input_size - input_off;
+            rret = ptls_receive(tls, &decryptbuf, input + input_off, &consumed);
+            input_off += consumed;
+          } while (rret == 0 && input_off < input_size);
 
-      tcpls->tls->traffic_protection.dec.aead = remember_aead;
+          tcpls->tls->traffic_protection.dec.aead = remember_aead;
+        }
+        if (rret != 0) {
+          ptls_buffer_dispose(&decryptbuf);
+          list_free(socklist);
+          return ret;
+        }
+        memcpy(buf, decryptbuf.base, decryptbuf.off);
+        ret = decryptbuf.off;
+        ptls_buffer_dispose(&decryptbuf);
+      }
     }
-    if (rret != 0) {
-      ptls_buffer_dispose(&decryptbuf);
-      list_free(socklist);
-      return ret;
-    }
-    memcpy(buf, decryptbuf.base, decryptbuf.off);
-    ret = decryptbuf.off;
-    ptls_buffer_dispose(&decryptbuf);
   }
   return ret;
 }
@@ -1010,16 +1069,16 @@ int ptls_send_tcpoption(ptls_t *tls, ptls_buffer_t *sendbuf, tcpls_enum_t type)
   tcpls_t *tcpls = tls->tcpls;
   if(tls->traffic_protection.enc.aead == NULL)
     return -1;
-  
+
   if (tls->traffic_protection.enc.aead->seq >= 16777216)
     tls->needs_key_update = 1;
 
   if (tls->needs_key_update) {
-        int ret;
-        if ((ret = update_send_key(tls, sendbuf, tls->key_update_send_request)) != 0)
-            return ret;
-        tls->needs_key_update = 0;
-        tls->key_update_send_request = 0;
+    int ret;
+    if ((ret = update_send_key(tls, sendbuf, tls->key_update_send_request)) != 0)
+      return ret;
+    tls->needs_key_update = 0;
+    tls->key_update_send_request = 0;
   }
   /** Get the option */
   tcpls_options_t *option;
@@ -1828,7 +1887,7 @@ static void _set_primary(tcpls_t *tcpls) {
     tcpls->socket_primary = primary_con->socket;
     return;
   }
- 
+  primary_con->is_primary = 1;
   tcpls->socket_primary = primary_con->socket;
   /* set the primary bit to the addresses */
   if (primary_con->src)
