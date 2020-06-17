@@ -131,6 +131,7 @@ static int handle_tcpls_read(tcpls_t *tcpls, int socket) {
 }
 
 static int handle_tcpls_write(tcpls_t *tcpls, int socket) {
+  fprintf(stderr, "wants to write");
   return 0;
 }
 
@@ -460,6 +461,8 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
             /** ADD our ips */
             tcpls_add_ips(new_tcpls, sa_ours, NULL, nbr_ours, 0);
             list_add(conn_tcpls, &conntcpls);
+            if (tcpls_accept(new_tcpls, conntcpls.conn_fd, NULL) < 0)
+              fprintf(stderr, "tcpls_accept returned -1");
           }
         }
       }

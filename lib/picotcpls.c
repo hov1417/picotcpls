@@ -576,6 +576,8 @@ int tcpls_accept(tcpls_t *tcpls, int socket, uint8_t *cookie) {
   connect_info_t newconn;
   memset(&newconn, 0, sizeof(connect_info_t));
   newconn.state = CONNECTED;
+  newconn.socket = socket;
+  tcpls->nbr_tcp_streams++;
   if (getsockname(socket, (struct sockaddr *) &ss, &sslen) < 0) {
     perror("getsockname(2) failed");
   }
@@ -1023,27 +1025,41 @@ ssize_t tcpls_receive(ptls_t *tls, void *buf, size_t nbytes, struct timeval *tv)
       if (ret > 0) {
         ptls_buffer_t decryptbuf;
         ptls_buffer_init(&decryptbuf, "", ret);
-        int rret = 1;
         list_t *streams_ptr = get_streams_from_socket(tcpls, tcpls->socket_rcv);
-        for (int i = 0; i < streams_ptr->size && rret; i++) {
-          tcpls_stream_t **stream = list_get(streams_ptr, i);
-
-          ptls_aead_context_t *remember_aead = tcpls->tls->traffic_protection.dec.aead;
-          // get the right  aead context matching the stream id
-          // This is done for compabitility with original PTLS's unit tests
-          /** We possible have not stream attached server-side */
-          if (stream)
-            tcpls->tls->traffic_protection.dec.aead = (*stream)->aead_dec;
-          size_t input_off = 0;
-          size_t input_size = ret;
-          size_t consumed;
+        /** The first message over the fist connection, server-side, we do not
+         * have streams attach yet, it is coming! */
+        int rret = 1;
+        size_t input_off = 0;
+        size_t input_size = ret;
+        size_t consumed;
+        if (!streams_ptr->size == 0) {
           do {
             consumed = input_size - input_off;
             rret = ptls_receive(tls, &decryptbuf, input + input_off, &consumed);
             input_off += consumed;
           } while (rret == 0 && input_off < input_size);
+        }
+        else {
+          for (int i = 0; i < streams_ptr->size && rret; i++) {
+            tcpls_stream_t **stream = list_get(streams_ptr, i);
 
-          tcpls->tls->traffic_protection.dec.aead = remember_aead;
+            ptls_aead_context_t *remember_aead = tcpls->tls->traffic_protection.dec.aead;
+            // get the right  aead context matching the stream id
+            // This is done for compabitility with original PTLS's unit tests
+            /** We possible have not stream attached server-side */
+            if (stream)
+              tcpls->tls->traffic_protection.dec.aead = (*stream)->aead_dec;
+            input_off = 0;
+            input_size = ret;
+            consumed;
+            do {
+              consumed = input_size - input_off;
+              rret = ptls_receive(tls, &decryptbuf, input + input_off, &consumed);
+              input_off += consumed;
+            } while (rret == 0 && input_off < input_size);
+
+            tcpls->tls->traffic_protection.dec.aead = remember_aead;
+          }
         }
         if (rret != 0) {
           ptls_buffer_dispose(&decryptbuf);
