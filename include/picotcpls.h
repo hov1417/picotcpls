@@ -34,6 +34,11 @@ typedef enum tcpls_enum_t {
   STREAM_CLOSE
 } tcpls_enum_t;
 
+typedef enum tcpls_event_t {
+  CONN_CLOSED,
+  CONN_OPENED
+} tcpls_event_t;
+
 typedef enum tcpls_tcp_state_t {
   CLOSED,
   CONNECTING,

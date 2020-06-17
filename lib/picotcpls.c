@@ -1008,8 +1008,8 @@ ssize_t tcpls_receive(ptls_t *tls, void *buf, size_t nbytes, struct timeval *tv)
         con = get_con_info_from_socket(tcpls, *socket);
         assert(con);
         con->state = CLOSED;
+        tls->ctx->connection_event_cb(CONN_CLOSED, *socket, tls->ctx->cb_data);
         close(*socket);
-        /** TODO CALLBACK */
         list_free(socklist);
         return ret;
       }

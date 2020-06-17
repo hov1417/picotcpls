@@ -778,11 +778,6 @@ typedef struct st_ptls_log_event_t {
      */
     unsigned support_tcpls_options : 1;
 
-    /**
-     * Set to 1 if the other peer also announced it supports Encrypted TCP
-     * options
-     */
-    unsigned tcpls_options_confirmed : 1;
     
     /**
      * If set to 1, ptls_receive would contain into its decrypted buffer any
@@ -833,6 +828,17 @@ typedef struct st_ptls_log_event_t {
      *
      */
     ptls_on_extension_t *on_extension;
+    
+    /**
+     * A callback used when a connection event occurs
+     */
+
+    int (*connection_event_cb)(tcpls_event_t event, int socket, void *cb_data);
+    /**
+     * Optional data to be passed to the callback function
+     */
+
+    void *cb_data;
   };
 
   typedef struct st_ptls_raw_extension_t {
@@ -942,7 +948,6 @@ typedef struct st_ptls_log_event_t {
      * A callback used when a mpjoin is received
      */
     int (*received_mpjoin_to_process)(int socket, uint8_t *connid, uint8_t *cookie);
-    
     /**
      * TCPLS handshake socket
      */

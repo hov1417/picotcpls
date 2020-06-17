@@ -85,7 +85,25 @@ struct conn_to_tcpls {
 
 static struct tcpls_options tcpls_options;
 
-
+static int handle_connection_event(tcpls_event_t event, int socket, void *cbdata) {
+  list_t *conntcpls = (list_t*) cbdata;
+  switch (event) {
+    case CONN_CLOSED:
+      {
+        struct conn_to_tcpls *ctcpls;
+        for (int i = 0; i < conntcpls->size; i++) {
+          ctcpls = list_get(conntcpls, i);
+          if (ctcpls->conn_fd == socket) {
+            list_remove(conntcpls, ctcpls);
+            break;
+          }
+        }
+      }
+      break;
+    default: break;
+  }
+  return 0;
+}
 static void make_nonblocking(int fd)
 {
     fcntl(fd, F_SETFL, O_NONBLOCK);
@@ -375,6 +393,8 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
   int conn_fd, on = 1;
   int listenfd[nbr_ours];
   list_t *conn_tcpls = new_list(sizeof(struct conn_to_tcpls), 2);
+  ctx->connection_event_cb = &handle_connection_event;
+  ctx->cb_data = conn_tcpls;
   socklen_t salen;
   struct timeval timeout;
   memset(&timeout, 0, sizeof(struct timeval));
