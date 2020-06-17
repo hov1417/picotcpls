@@ -126,6 +126,7 @@ static int handle_tcpls_read(tcpls_t *tcpls, int socket) {
     fprintf(stderr, "tcpls_receive returned %d",ret);
     return -1;
   }
+  sleep(1);
   write(1, buf, ret);
   return 0;
 }
@@ -143,8 +144,8 @@ static int handle_server_connection(tcpls_t *tcpls) {
 static int handle_client_connection(tcpls_t *tcpls) {
   /** handshake*/
   handle_tcpls_read(tcpls, 0);
-  char input[6] = "coucou";
-  tcpls_send(tcpls->tls, 0, input, 6);
+  char input[7] = "coucou\n";
+  tcpls_send(tcpls->tls, 0, input, 7);
   return 0;
 }
 
@@ -376,6 +377,7 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
   list_t *conn_tcpls = new_list(sizeof(struct conn_to_tcpls), 2);
   socklen_t salen;
   struct timeval timeout;
+  memset(&timeout, 0, sizeof(struct timeval));
   for (int i = 0; i < nbr_ours; i++) {
     if (sa_ours[i].ss_family == AF_INET) {
       if ((listenfd[i] = socket(AF_INET, SOCK_STREAM, 0)) == -1) {

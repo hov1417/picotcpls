@@ -1024,7 +1024,7 @@ ssize_t tcpls_receive(ptls_t *tls, void *buf, size_t nbytes, struct timeval *tv)
       /* We have stuff to decrypts */
       if (ret > 0) {
         ptls_buffer_t decryptbuf;
-        ptls_buffer_init(&decryptbuf, "", ret);
+        ptls_buffer_init(&decryptbuf, "", 0);
         list_t *streams_ptr = get_streams_from_socket(tcpls, tcpls->socket_rcv);
         /** The first message over the fist connection, server-side, we do not
          * have streams attach yet, it is coming! */
@@ -1032,7 +1032,7 @@ ssize_t tcpls_receive(ptls_t *tls, void *buf, size_t nbytes, struct timeval *tv)
         size_t input_off = 0;
         size_t input_size = ret;
         size_t consumed;
-        if (!streams_ptr->size == 0) {
+        if (streams_ptr->size == 0) {
           do {
             consumed = input_size - input_off;
             rret = ptls_receive(tls, &decryptbuf, input + input_off, &consumed);
@@ -1051,7 +1051,6 @@ ssize_t tcpls_receive(ptls_t *tls, void *buf, size_t nbytes, struct timeval *tv)
               tcpls->tls->traffic_protection.dec.aead = (*stream)->aead_dec;
             input_off = 0;
             input_size = ret;
-            consumed;
             do {
               consumed = input_size - input_off;
               rret = ptls_receive(tls, &decryptbuf, input + input_off, &consumed);

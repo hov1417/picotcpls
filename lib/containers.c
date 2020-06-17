@@ -75,8 +75,6 @@ void tcpls_record_fifo_free(tcpls_record_fifo_t *fifo) {
 }
 
 /* =================================================LIST===========================*/
-
-
 /**
  * Create a new list_t containting room capacity items of size itemsize
  *
@@ -87,6 +85,8 @@ list_t *new_list(int itemsize, int capacity) {
   list_t *list = malloc(sizeof(*list));
   if (!list)
     return NULL;
+  if (!capacity)
+    capacity+=1;
   list->items = malloc(itemsize*capacity);
   if (!list->items) {
     free(list);
