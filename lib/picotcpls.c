@@ -121,19 +121,6 @@ void *tcpls_new(void *ctx, int is_server) {
   tcpls->tls = tls;
   ptls_buffer_init(tcpls->sendbuf, "", 0);
   ptls_buffer_init(tcpls->recvbuf, "", 0);
-  tcpls->send_start = 0;
-  ptls_ctx->output_decrypted_tcpls_data = 0;
-  tcpls->socket_primary = 0;
-  tcpls->socket_rcv = 0;
-  tcpls->ours_v4_addr_llist = NULL;
-  tcpls->ours_v6_addr_llist = NULL;
-  tcpls->v4_addr_llist = NULL;
-  tcpls->v6_addr_llist = NULL;
-  tcpls->cookie_counter = 0;
-  tcpls->nbr_of_peer_streams_attached = 0;
-  tcpls->nbr_tcp_streams = 0;
-  tcpls->check_stream_attach_sent = 0;
-  tcpls->streams_marked_for_close = 0;
   tcpls->tcpls_options = new_list(sizeof(tcpls_options_t), NBR_SUPPORTED_TCPLS_OPTIONS);
   tcpls->streams = new_list(sizeof(tcpls_stream_t), 3);
   tcpls->connect_infos = new_list(sizeof(connect_info_t), 2);
@@ -1017,6 +1004,12 @@ ssize_t tcpls_receive(ptls_t *tls, void *buf, size_t nbytes, struct timeval *tv)
         return ret;
       }
       else if (ret == 0) {
+        // mark the connection as closed?
+        con = get_con_info_from_socket(tcpls, *socket);
+        assert(con);
+        con->state = CLOSED;
+        close(*socket);
+        /** TODO CALLBACK */
         list_free(socklist);
         return ret;
       }
@@ -1421,7 +1414,7 @@ static int  tcpls_init_context(ptls_t *ptls, const void *data, size_t datalen,
 
 int handle_tcpls_extension_option(ptls_t *ptls, tcpls_enum_t type,
     const uint8_t *input, size_t inputlen) {
-  if (!ptls->ctx->tcpls_options_confirmed)
+  if (!ptls->tcpls->tcpls_options_confirmed)
     return -1;
   switch (type) {
     case CONNID:

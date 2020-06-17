@@ -168,6 +168,11 @@ struct st_tcpls_t {
   int socket_primary;
   /** remember on which socket we pulled out bytes */
   int socket_rcv;
+  /**
+   * Set to 1 if the other peer also announced it supports Encrypted TCP
+   * options
+   */
+  unsigned tcpls_options_confirmed : 1;
 };
 
 struct st_ptls_record_t;

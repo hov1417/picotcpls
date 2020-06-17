@@ -1197,8 +1197,6 @@ static void test_sends_varlen_bpf_prog(void)
   ptls_t *client, *server;
   ctx->support_tcpls_options = 1;
   ctx_peer->support_tcpls_options = 1;
-  ctx_peer->tcpls_options_confirmed =0;
-  ctx->tcpls_options_confirmed =0;
 
   ptls_buffer_t cbuf, sbuf, decbuf;
   size_t coffs[5] = {0}, soffs[5];
@@ -1221,12 +1219,12 @@ static void test_sends_varlen_bpf_prog(void)
   ok(ret == 0);
   ok(sbuf.off != 0);
   ok(!ptls_handshake_is_complete(server));
-  ok(ctx_peer->tcpls_options_confirmed == 1);
+  ok(tcpls_server->tcpls_options_confirmed == 1);
   ret = feed_messages(client, &cbuf, coffs, sbuf.base, soffs, NULL);
   ok(ret == 0);
   ok(cbuf.off != 0);
   ok(ptls_handshake_is_complete(client));
-  ok(ctx->tcpls_options_confirmed == 1);
+  ok(tcpls_client->tcpls_options_confirmed == 1);
   
   ret = feed_messages(server, &sbuf, soffs, cbuf.base, coffs, NULL);
   ok(ret == 0);
@@ -1258,8 +1256,6 @@ static void test_tcpls_mpjoin(void)
   ptls_t *client, *server;
   ctx->support_tcpls_options = 1;
   ctx_peer->support_tcpls_options = 1;
-  ctx_peer->tcpls_options_confirmed =0;
-  ctx->tcpls_options_confirmed = 0;
 
   ptls_buffer_t cbuf, sbuf;
   size_t coffs[5] = {0}, soffs[5];
@@ -1284,12 +1280,12 @@ static void test_tcpls_mpjoin(void)
   ok(ret == 0);
   ok(sbuf.off != 0);
   ok(!ptls_handshake_is_complete(server));
-  ok(ctx_peer->tcpls_options_confirmed == 1);
+  ok(tcpls_server->tcpls_options_confirmed == 1);
   ret = feed_messages(client, &cbuf, coffs, sbuf.base, soffs, NULL);
   ok(ret == 0);
   ok(cbuf.off != 0);
   ok(ptls_handshake_is_complete(client));
-  ok(ctx->tcpls_options_confirmed == 1);
+  ok(tcpls_client->tcpls_options_confirmed == 1);
   
   ret = feed_messages(server, &sbuf, soffs, cbuf.base, coffs, NULL);
   ok(ret == 0);
@@ -1308,7 +1304,7 @@ static void test_tcpls_mpjoin(void)
   /** processing MPJOIN */
   consumed = cbuf.off;
   sbuf.off = 0;
-  ctx_peer->tcpls_options_confirmed = 0;
+  tcpls_server->tcpls_options_confirmed = 0;
   ret = ptls_handshake(tcpls_server2->tls, &sbuf, cbuf.base, &consumed, &properties);
   ok(ret == PTLS_ERROR_HANDSHAKE_IS_MPJOIN);
   cbuf.off = 0;
@@ -1321,8 +1317,6 @@ static void test_tcpls_mpjoin(void)
   tcpls_free(tcpls_client);
   tcpls_free(tcpls_server);
   tcpls_free(tcpls_server2);
-  ctx->tcpls_options_confirmed = 0;
-  ctx_peer->tcpls_options_confirmed = 0;
   ctx->support_tcpls_options = 0;
   ctx_peer->support_tcpls_options = 0;
 }
@@ -1332,8 +1326,6 @@ static void test_sends_tcpls_record(void)
   ptls_t *client, *server;
   ctx->support_tcpls_options = 1;
   ctx_peer->support_tcpls_options = 1;
-  ctx_peer->tcpls_options_confirmed =0;
-  ctx->tcpls_options_confirmed = 0;
 
   ptls_buffer_t cbuf, sbuf, decbuf;
   size_t coffs[5] = {0}, soffs[5];
@@ -1357,12 +1349,12 @@ static void test_sends_tcpls_record(void)
   ok(ret == 0);
   ok(sbuf.off != 0);
   ok(!ptls_handshake_is_complete(server));
-  ok(ctx_peer->tcpls_options_confirmed == 1);
+  ok(tcpls_server->tcpls_options_confirmed == 1);
   ret = feed_messages(client, &cbuf, coffs, sbuf.base, soffs, NULL);
   ok(ret == 0);
   ok(cbuf.off != 0);
   ok(ptls_handshake_is_complete(client));
-  ok(ctx->tcpls_options_confirmed == 1);
+  ok(tcpls_client->tcpls_options_confirmed == 1);
   
   ret = feed_messages(server, &sbuf, soffs, cbuf.base, coffs, NULL);
   ok(ret == 0);
@@ -1405,8 +1397,6 @@ static void test_sends_tcpls_record(void)
   ptls_buffer_dispose(&sbuf);
   tcpls_free(tcpls_client);
   tcpls_free(tcpls_server);
-  ctx->tcpls_options_confirmed = 0;
-  ctx_peer->tcpls_options_confirmed = 0;
   ctx->support_tcpls_options = 0;
   ctx_peer->support_tcpls_options = 0;
 }
@@ -1457,12 +1447,12 @@ static void test_server_sends_tcpls_encrypted_extensions(void)
   ok(ret == 0);
   ok(sbuf.off != 0);
   ok(!ptls_handshake_is_complete(server));
-  ok(ctx_peer->tcpls_options_confirmed == 1);
+  ok(tcpls_server->tcpls_options_confirmed == 1);
   ret = feed_messages(client, &cbuf, coffs, sbuf.base, soffs, NULL);
   ok(ret == 0);
   ok(cbuf.off != 0);
   ok(ptls_handshake_is_complete(client));
-  ok(ctx->tcpls_options_confirmed == 1);
+  ok(tcpls_client->tcpls_options_confirmed == 1);
   tcpls_options_t *option = NULL;
   ok(client->tcpls->tcpls_options->size == 1);
   for (int i = 0; i < client->tcpls->tcpls_options->size; i++) {
@@ -1498,8 +1488,6 @@ static void test_server_sends_tcpls_encrypted_extensions(void)
   ctx_peer->save_ticket = NULL;
   ctx_peer->ticket_lifetime = 0;
   ctx_peer->max_early_data_size = 0;
-  ctx->tcpls_options_confirmed = 0;
-  ctx_peer->tcpls_options_confirmed = 0;
   ctx->support_tcpls_options = 0;
   ctx_peer->support_tcpls_options = 0;
 }
@@ -1529,8 +1517,6 @@ static void test_tcpls_usertimeout(void)
   ok(*((uint16_t *) option->data->base) == 32769);
   ctx->support_tcpls_options = 0;
   ctx_peer->support_tcpls_options = 0;
-  ctx->tcpls_options_confirmed = 0;
-  ctx_peer->tcpls_options_confirmed = 0;
   /** cleanup */
   /*ptls_free(client);*/
   /*ptls_free(server);*/
@@ -1545,8 +1531,6 @@ static void test_tcpls_option_api(void)
   traffic_secrets_t client_secrets = {{{0}}}, server_secrets = {{{0}}};
   ctx->support_tcpls_options = 1;
   ctx_peer->support_tcpls_options = 1;
-  ctx->tcpls_options_confirmed = 0;
-  ctx_peer->tcpls_options_confirmed = 0;
   ptls_buffer_t cbuf, sbuf;
   size_t coffs[5] = {0}, soffs[5];
   ptls_update_traffic_key_t update_traffic_key = {on_update_traffic_key};
@@ -1600,8 +1584,8 @@ static void test_tcpls_option_api(void)
   ok(ptls_handshake_is_complete(server));
   ok(memcmp(client_secrets[1][3], server_secrets[0][3], PTLS_MAX_DIGEST_SIZE) == 0);
   
-  ok(ctx->tcpls_options_confirmed ==1);
-  ok(ctx_peer->tcpls_options_confirmed ==1);
+  ok(tcpls_client->tcpls_options_confirmed ==1);
+  ok(tcpls_server->tcpls_options_confirmed ==1);
 
   /*ptls_free(client);*/
   /*ptls_free(server);*/
@@ -1629,8 +1613,6 @@ static void test_tcpls_option_api(void)
   ctx_peer->save_ticket = NULL;
   ctx_peer->ticket_lifetime = 0;
   ctx_peer->max_early_data_size = 0;
-  ctx->tcpls_options_confirmed = 0;
-  ctx_peer->tcpls_options_confirmed = 0;
   ctx->support_tcpls_options = 0;
   ctx_peer->support_tcpls_options = 0;
 }
@@ -2093,12 +2075,12 @@ static void test_tcpls_addresses(void)
   ok(ret == 0);
   ok(sbuf.off != 0);
   ok(!ptls_handshake_is_complete(server));
-  ok(ctx_peer->tcpls_options_confirmed == 1);
+  ok(tcpls_server->tcpls_options_confirmed == 1);
   ret = feed_messages(client, &cbuf, coffs, sbuf.base, soffs, NULL);
   ok(ret == 0);
   ok(cbuf.off != 0);
   ok(ptls_handshake_is_complete(client));
-  ok(ctx->tcpls_options_confirmed == 1);
+  ok(tcpls->tcpls_options_confirmed == 1);
 
   ret = feed_messages(server, &sbuf, soffs, cbuf.base, coffs, NULL);
   ok(ret == 0);
@@ -2121,8 +2103,6 @@ static void test_tcpls_addresses(void)
 
   ptls_buffer_dispose(&cbuf);
   ptls_buffer_dispose(&sbuf);
-  ctx->tcpls_options_confirmed = 0;
-  ctx_peer->tcpls_options_confirmed = 0;
   ctx->support_tcpls_options = 0;
   ctx_peer->support_tcpls_options = 0;
   ctx->failover = 0;
@@ -2180,12 +2160,12 @@ static void test_tcpls_stream_api(void)
   ok(ret == 0);
   ok(sbuf.off != 0);
   ok(!ptls_handshake_is_complete(server));
-  ok(ctx_peer->tcpls_options_confirmed == 1);
+  ok(tcpls_server->tcpls_options_confirmed == 1);
   ret = feed_messages(client, &cbuf, coffs, sbuf.base, soffs, NULL);
   ok(ret == 0);
   ok(cbuf.off != 0);
   ok(ptls_handshake_is_complete(client));
-  ok(ctx->tcpls_options_confirmed == 1);
+  ok(tcpls->tcpls_options_confirmed == 1);
 
   ret = feed_messages(server, &sbuf, soffs, cbuf.base, coffs, NULL);
   ok(ret == 0);
@@ -2233,8 +2213,6 @@ static void test_tcpls_stream_api(void)
   ptls_buffer_dispose(&cbuf);
   ptls_buffer_dispose(&sbuf);
   ptls_buffer_dispose(&decbuf);
-  ctx->tcpls_options_confirmed = 0;
-  ctx_peer->tcpls_options_confirmed = 0;
   ctx->support_tcpls_options = 0;
   ctx_peer->support_tcpls_options = 0;
   ctx->failover = 0;

@@ -1991,7 +1991,7 @@ static int decode_server_hello(ptls_t *tls, struct st_ptls_server_hello_t *sh, c
             break;
         /** The server wishes to use encrypted TCP options */
         case PTLS_EXTENSION_TYPE_ENCRYPTED_TCP_OPTIONS:
-          tls->ctx->tcpls_options_confirmed = 1;
+          tls->tcpls->tcpls_options_confirmed = 1;
           break;
 
         default:
@@ -3008,7 +3008,7 @@ static int decode_client_hello(ptls_t *tls, struct st_ptls_client_hello_t *ch,
         switch (exttype) {
         case PTLS_EXTENSION_TYPE_ENCRYPTED_TCP_OPTIONS:
             if (tls->ctx->support_tcpls_options) {
-              tls->ctx->tcpls_options_confirmed = 1;
+              tls->tcpls->tcpls_options_confirmed = 1;
             }
             break;
         case PTLS_EXTENSION_TYPE_SERVER_NAME:
@@ -3733,7 +3733,7 @@ static int server_handle_hello(ptls_t *tls, ptls_message_emitter_t *emitter, ptl
                               buffer_push_extension(sendbuf, PTLS_EXTENSION_TYPE_PRE_SHARED_KEY,
                                                     { ptls_buffer_push16(sendbuf, (uint16_t)psk_index); });
                           }
-                          if (tls->ctx->support_tcpls_options && tls->ctx->tcpls_options_confirmed) {
+                          if (tls->ctx->support_tcpls_options) {
                               buffer_push_extension(sendbuf, PTLS_EXTENSION_TYPE_ENCRYPTED_TCP_OPTIONS,
                                   {});
                           }
@@ -4645,7 +4645,7 @@ int ptls_handshake(ptls_t *tls, ptls_buffer_t *_sendbuf, const void *input,
     }
 
     if (!tls->is_server && properties && properties->client.mpjoin &&
-        tls->ctx->tcpls_options_confirmed) {
+        tls->tcpls->tcpls_options_confirmed) {
         return send_client_hello(tls, &emitter.super, properties, NULL);
     }
 

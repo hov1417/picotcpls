@@ -418,8 +418,8 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
 
   if (ctx->support_tcpls_options) {
     while (1) {
-      int maxfd = 0;
       fd_set readset, writeset;
+      int maxfd = 0;
       do {
         timeout.tv_sec = 100;
         FD_ZERO(&readset);
@@ -441,7 +441,7 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
             maxfd = conn->conn_fd;
         }
         fprintf(stderr, "waiting for connection or r/w event...\n");
-      } while (select(maxfd+1, &readset, &writeset, NULL, &timeout) <= 0);
+      } while (select(maxfd+1, &readset, &writeset, NULL, &timeout) == -1);
       /** Check first we have a listen() connection */
       for (int i = 0; i < nbr_ours; i++) {
         if (FD_ISSET(listenfd[i], &readset)) {
