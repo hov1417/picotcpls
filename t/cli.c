@@ -104,6 +104,7 @@ static int handle_connection_event(tcpls_event_t event, int socket, void *cbdata
   }
   return 0;
 }
+
 static void make_nonblocking(int fd)
 {
     fcntl(fd, F_SETFL, O_NONBLOCK);
@@ -769,41 +770,61 @@ int main(int argc, char **argv)
                 tcpls_options.timeout = 1;
                 break;
       case 'p':
-                if (strlen(optarg) != 15)  {
-                  fprintf(stderr, "Uncorrect v4 addr: %s\n", optarg);
-                  exit(1);
+                {
+                  char addr[16];
+                  if (strlen(optarg) > 15)  {
+                    fprintf(stderr, "Uncorrect v4 addr: %s\n", optarg);
+                    exit(1);
+                  }
+                  if (!tcpls_options.peer_addrs)
+                    tcpls_options.peer_addrs = new_list(16*sizeof(char), 2);
+                  memcpy(addr, optarg, strlen(optarg));
+                  addr[strlen(optarg)] = '\0';
+                  list_add(tcpls_options.peer_addrs, addr);
                 }
-                if (!tcpls_options.peer_addrs)
-                  tcpls_options.peer_addrs = new_list(15*sizeof(char), 2);
-                list_add(tcpls_options.peer_addrs, optarg);
                 break;
       case 'P':
-                if (strlen(optarg) != 39)  {
-                  fprintf(stderr, "Uncorrect v6 addr: %s\n", optarg);
-                  exit(1);
+                {
+                  char addr6[40];
+                  if (strlen(optarg) > 39)  {
+                    fprintf(stderr, "Uncorrect v6 addr: %s\n", optarg);
+                    exit(1);
+                  }
+                  if (!tcpls_options.peer_addrs)
+                    tcpls_options.peer_addrs6 = new_list(40*sizeof(char), 2);
+                  memcpy(addr6, optarg, strlen(optarg));
+                  addr6[strlen(optarg)] = '\0';
+                  list_add(tcpls_options.peer_addrs6, addr6);
                 }
-                if (!tcpls_options.peer_addrs)
-                  tcpls_options.peer_addrs6 = new_list(39*sizeof(char), 2);
-                list_add(tcpls_options.peer_addrs6, optarg);
                 break;
 
       case 'z':
-                if (strlen(optarg) != 15)  {
-                  fprintf(stderr, "Uncorrect v4 addr: %s\n", optarg);
-                  exit(1);
+                {
+                  char addr[16];
+                  if (strlen(optarg) > 15)  {
+                    fprintf(stderr, "Uncorrect v4 addr: %s\n", optarg);
+                    exit(1);
+                  }
+                  if (!tcpls_options.our_addrs)
+                    tcpls_options.our_addrs = new_list(16*sizeof(char), 2);
+                  memcpy(addr, optarg, strlen(optarg));
+                  addr[strlen(optarg)] = '\0';
+                  list_add(tcpls_options.our_addrs, addr);
                 }
-                if (!tcpls_options.our_addrs)
-                  tcpls_options.our_addrs = new_list(15*sizeof(char), 2);
-                list_add(tcpls_options.our_addrs, optarg);
                 break;
       case 'Z':
-                if (strlen(optarg) != 39)  {
-                  fprintf(stderr, "Uncorrect v6 addr: %s\n", optarg);
-                  exit(1);
+                {
+                  char addr6[40];
+                  if (strlen(optarg) > 39)  {
+                    fprintf(stderr, "Uncorrect v6 addr: %s\n", optarg);
+                    exit(1);
+                  }
+                  if (!tcpls_options.our_addrs6)
+                    tcpls_options.our_addrs6 = new_list(40*sizeof(char), 2);
+                  memcpy(addr6, optarg, strlen(optarg));
+                  addr6[strlen(optarg)] = '\0';
+                  list_add(tcpls_options.our_addrs6, addr6);
                 }
-                if (!tcpls_options.our_addrs6)
-                  tcpls_options.our_addrs6 = new_list(39*sizeof(char), 2);
-                list_add(tcpls_options.our_addrs, optarg);
                 break;
       default:
                 exit(1);
