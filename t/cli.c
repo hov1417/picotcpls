@@ -145,7 +145,7 @@ static int handle_tcpls_read(tcpls_t *tcpls, int socket) {
     fprintf(stderr, "tcpls_receive returned %d",ret);
     return -1;
   }
-  sleep(1);
+  /*sleep(1);*/
   write(1, buf, ret);
   return 0;
 }
@@ -439,6 +439,7 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
 
   if (ctx->support_tcpls_options) {
     while (1) {
+      /*sleep(1);*/
       fd_set readset, writeset;
       int maxfd = 0;
       do {
@@ -529,16 +530,17 @@ static int run_client(struct sockaddr_storage *sa_our, struct sockaddr_storage
   tcpls_t *tcpls = tcpls_new(ctx, 0);
   tcpls_add_ips(tcpls, sa_our, sa_peer, nbr_our, nbr_peer);
   struct timeval timeout;
-  timeout.tv_sec = 1;
+  timeout.tv_sec = 5;
   timeout.tv_usec = 0;
   int err = tcpls_connect(tcpls->tls, NULL, NULL, &timeout);
   if (err){
-    perror("tcpls_connect(2) failed");
+    fprintf(stderr, "tcpls_connect failed");
     return 1;
   }
 
   if (ctx->support_tcpls_options) {
     int ret = handle_client_connection(tcpls);
+    sleep(100);
     free(hsprop->client.esni_keys.base);
     tcpls_free(tcpls);
     return ret;

@@ -401,7 +401,9 @@ int tcpls_connect(ptls_t *tls, struct sockaddr *src, struct sockaddr *dest,
   memcpy(&t_previous, &t_initial, sizeof(t_previous));
   tcpls->nbr_tcp_streams = nfds;
   connect_info_t *con;
+  int nbr_errors = 0;
   while (remaining_nfds) {
+    int result = 0;
     if ((ret = select(maxfds+1, NULL, &wset, NULL, timeout)) < 0) {
       return -1;
     }
@@ -414,38 +416,64 @@ int tcpls_connect(ptls_t *tls, struct sockaddr *src, struct sockaddr *dest,
       return 1;
     }
     else {
-      gettimeofday(&t_current, NULL);
-      
-      int new_val =
-        timeout->tv_sec*(uint64_t)1000000+timeout->tv_usec
-          - (t_current.tv_sec*(uint64_t)1000000+t_current.tv_usec
-              - t_previous.tv_sec*(uint64_t)1000000-t_previous.tv_usec);
-
-      memcpy(&t_previous, &t_current, sizeof(t_previous));
-     
-      int rtt = t_current.tv_sec*(uint64_t)1000000+t_current.tv_usec
-        - t_initial.tv_sec*(uint64_t)1000000-t_initial.tv_usec;
-
-      int sec = new_val / 1000000;
-      timeout->tv_sec = sec;
-      timeout->tv_usec = new_val - timeout->tv_sec*(uint64_t)1000000;
-
-      sec = rtt / 1000000;
+      /** Check first for connection result! */
+      socklen_t reslen = sizeof(result);
       for (int i = 0; i < tcpls->connect_infos->size; i++) {
         con = list_get(tcpls->connect_infos, i);
         if (con->state == CONNECTING && FD_ISSET(con->socket, &wset)) {
-          /* it is the right con =) */
-          con->connect_time.tv_sec = sec;
-          con->connect_time.tv_usec = rtt - sec*(uint64_t)1000000;
-          con->state = CONNECTED;
-          int flags = fcntl(con->socket, F_GETFL);
-          flags &= ~O_NONBLOCK;
-          fcntl(con->socket, F_SETFL, flags);
+          if (getsockopt(con->socket, SOL_SOCKET, SO_ERROR, &result, &reslen) < 0) {
+            con->state = CLOSED;
+            close(con->socket);
+            break;
+          }
+          if (result != 0) {
+            fprintf(stderr, "Connect(2) failed: %s\n", strerror(result));
+            /*fprintf(stderr, "Connection error %d\n", result);*/
+            con->state = CLOSED;
+            close(con->socket);
+            nbr_errors++;
+            /** Callback! */
+            break;
+          }
+        }
+
+      }
+      if (result == 0) {
+        gettimeofday(&t_current, NULL);
+
+        int new_val =
+          timeout->tv_sec*(uint64_t)1000000+timeout->tv_usec
+          - (t_current.tv_sec*(uint64_t)1000000+t_current.tv_usec
+              - t_previous.tv_sec*(uint64_t)1000000-t_previous.tv_usec);
+
+        memcpy(&t_previous, &t_current, sizeof(t_previous));
+
+        int rtt = t_current.tv_sec*(uint64_t)1000000+t_current.tv_usec
+          - t_initial.tv_sec*(uint64_t)1000000-t_initial.tv_usec;
+
+        int sec = new_val / 1000000;
+        timeout->tv_sec = sec;
+        timeout->tv_usec = new_val - timeout->tv_sec*(uint64_t)1000000;
+
+        sec = rtt / 1000000;
+        for (int i = 0; i < tcpls->connect_infos->size; i++) {
+          con = list_get(tcpls->connect_infos, i);
+          if (con->state == CONNECTING && FD_ISSET(con->socket, &wset)) {
+            /* it is the right con =) */
+            con->connect_time.tv_sec = sec;
+            con->connect_time.tv_usec = rtt - sec*(uint64_t)1000000;
+            con->state = CONNECTED;
+            int flags = fcntl(con->socket, F_GETFL);
+            flags &= ~O_NONBLOCK;
+            fcntl(con->socket, F_SETFL, flags);
+          }
         }
       }
       remaining_nfds--;
     }
   }
+  if (nbr_errors == nfds)
+    return -1;
   _set_primary(tcpls);
   return 0;
 }
@@ -1268,12 +1296,16 @@ static int handle_connect(tcpls_t *tcpls, tcpls_v4_addr_t *src, tcpls_v4_addr_t
     if (afinet == AF_INET) {
       if (connect(coninfo->socket, (struct sockaddr*) &dest->addr,
             sizeof(dest->addr)) < 0 && errno != EINPROGRESS) {
+        coninfo->state = CLOSED;
+        close(coninfo->socket);
         return -1;
       }
     }
     else {
       if (connect(coninfo->socket, (struct sockaddr*) &dest6->addr,
             sizeof(dest6->addr)) < 0 && errno != EINPROGRESS) {
+        coninfo->state =  CLOSED;
+        close(coninfo->socket);
         return -1;
       }
     }
