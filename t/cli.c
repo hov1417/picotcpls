@@ -187,7 +187,6 @@ static int handle_connection(int sockfd, ptls_context_t *ctx, const char *server
     ptls_buffer_init(&encbuf, "", 0);
     ptls_buffer_init(&ptbuf, "", 0);
 
-    
 
     fcntl(sockfd, F_SETFL, O_NONBLOCK);
 
@@ -534,13 +533,12 @@ static int run_client(struct sockaddr_storage *sa_our, struct sockaddr_storage
   timeout.tv_usec = 0;
   int err = tcpls_connect(tcpls->tls, NULL, NULL, &timeout);
   if (err){
-    fprintf(stderr, "tcpls_connect failed");
+    fprintf(stderr, "tcpls_connect failed with err %d", err);
     return 1;
   }
 
   if (ctx->support_tcpls_options) {
     int ret = handle_client_connection(tcpls);
-    sleep(100);
     free(hsprop->client.esni_keys.base);
     tcpls_free(tcpls);
     return ret;
