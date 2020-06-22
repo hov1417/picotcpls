@@ -731,9 +731,6 @@ streamid_t tcpls_stream_new(ptls_t *tls, struct sockaddr *src, struct sockaddr *
     /** get back this copy */
     con_stored = list_get(tcpls->connect_infos, tcpls->connect_infos->size-1);
   }
-  if (ret)
-    con_stored = &coninfo;
-
   tcpls_stream_t *stream = stream_helper_new(tcpls, con_stored);
   if (!stream)
     return 0;
