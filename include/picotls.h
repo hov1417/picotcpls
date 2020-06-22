@@ -828,16 +828,17 @@ typedef struct st_ptls_log_event_t {
      *
      */
     ptls_on_extension_t *on_extension;
-    
+    /**
+     * A callback used when a stream event occurs
+     */
+    int (*stream_event_cb)(tcpls_event_t event, streamid_t streamid, void *cb_data);
     /**
      * A callback used when a connection event occurs
      */
-
     int (*connection_event_cb)(tcpls_event_t event, int socket, void *cb_data);
     /**
-     * Optional data to be passed to the callback function
+     * Optional data to be passed to the callback functions
      */
-
     void *cb_data;
   };
 

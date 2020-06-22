@@ -86,6 +86,7 @@ static connect_info_t *get_primary_con_info(tcpls_t *tcpls);
 static list_t *get_streams_from_socket(tcpls_t *tcpls, int socket);
 static tcpls_stream_t *stream_get(tcpls_t *tcpls, streamid_t streamid);
 static tcpls_stream_t *stream_helper_new(tcpls_t *tcpls, connect_info_t *con);
+static int stream_cleanup(connect_info_t *con);
 static void check_stream_attach_have_been_sent(tcpls_t *tcpls, int consumed);
 static int new_stream_derive_aead_context(ptls_t *tls, tcpls_stream_t *stream, int is_ours);
 static int handle_connect(tcpls_t *tcpls, tcpls_v4_addr_t *src, tcpls_v4_addr_t
@@ -186,6 +187,7 @@ int tcpls_add_v4(ptls_t *tls, struct sockaddr_in *addr, int is_primary, int
   tcpls_v4_addr_t *new_v4 = malloc(sizeof(tcpls_v4_addr_t));
   if (new_v4 == NULL)
     return PTLS_ERROR_NO_MEMORY;
+  memset(new_v4, 0, sizeof(*new_v4));
   new_v4->is_primary = is_primary;
   memcpy(&new_v4->addr, addr, sizeof(*addr));
   new_v4->next = NULL;
@@ -234,6 +236,7 @@ int tcpls_add_v6(ptls_t *tls, struct sockaddr_in6 *addr, int is_primary, int
   tcpls_v6_addr_t *new_v6 = malloc(sizeof(*new_v6));
   if (new_v6 == NULL)
     return PTLS_ERROR_NO_MEMORY;
+  memset(new_v6, 0, sizeof(*new_v6));
   new_v6->is_primary = is_primary;
   memcpy(&new_v6->addr, addr, sizeof(*addr));
   new_v6->next = NULL;
@@ -846,9 +849,8 @@ int tcpls_stream_close(ptls_t *tls, streamid_t streamid, int sendnow) {
     else if (ret+tcpls->send_start < tcpls->sendbuf->off) {
       tcpls->send_start += ret;
     }
-    close(stream->con->socket);
-    list_remove(tcpls->streams, stream);
-    stream_free(stream);
+    /*close(stream->con->socket);*/
+    /*list_remove(tcpls->streams, stream);*/
   }
   else {
     stream->marked_for_close = 1;
@@ -990,17 +992,17 @@ ssize_t tcpls_send(ptls_t *tls, streamid_t streamid, const void *input, size_t n
     tcpls->send_start = 0;
     tcpls->check_stream_attach_sent = 0;
     /** Do we have stream cleanup to do ? */
-    if (tcpls->streams_marked_for_close) {
-      for (int i = 0; i < tcpls->streams->size; i++) {
-        stream = list_get(tcpls->streams, i);
-        if (stream->marked_for_close) {
-          close(stream->con->socket);
-          list_remove(tcpls->streams, stream);
-          stream_free(stream);
-        }
-      }
-      tcpls->streams_marked_for_close = 0;
-    }
+    /*if (tcpls->streams_marked_for_close) {*/
+      /*for (int i = 0; i < tcpls->streams->size; i++) {*/
+        /*stream = list_get(tcpls->streams, i);*/
+        /*if (stream->marked_for_close) {*/
+          /*close(stream->con->socket);*/
+          /*list_remove(tcpls->streams, stream);*/
+          /*stream_free(stream);*/
+        /*}*/
+      /*}*/
+      /*tcpls->streams_marked_for_close = 0;*/
+    /*}*/
   }
   else if (ret+tcpls->send_start < tcpls->sendbuf->off) {
     tcpls->send_start += ret;
@@ -1021,13 +1023,16 @@ ssize_t tcpls_receive(ptls_t *tls, void *buf, size_t nbytes, struct timeval *tv)
   list_t *socklist = new_list(sizeof(int), tcpls->nbr_tcp_streams);
   FD_ZERO(&rset);
   connect_info_t *con;
+  int received_data = 0;
   int maxfd = 0;
   for (int i = 0; i < tcpls->connect_infos->size; i++) {
     con = list_get(tcpls->connect_infos, i);
-    list_add(socklist, &con->socket);
-    FD_SET(con->socket, &rset);
-    if (maxfd < con->socket)
-      maxfd = con->socket;
+    if (con->state != CLOSED) {
+      list_add(socklist, &con->socket);
+      FD_SET(con->socket, &rset);
+      if (maxfd < con->socket)
+        maxfd = con->socket;
+    }
   }
   ret = select(maxfd+1, &rset, NULL, NULL, tv);
   if (ret == -1) {
@@ -1037,22 +1042,32 @@ ssize_t tcpls_receive(ptls_t *tls, void *buf, size_t nbytes, struct timeval *tv)
   int *socket;
   ret = 0;
   uint8_t input[nbytes];
+  ptls_buffer_t decryptbuf;
+  ptls_buffer_init(&decryptbuf, "", 0);
   for (int i =  0; i < socklist->size; i++) {
     socket = list_get(socklist, i);
     if (FD_ISSET(*socket, &rset)) {
       ret = recv(*socket, input, nbytes, 0);
       if (ret == -1) {
-        list_free(socklist);
         if (errno == ECONNRESET) {
           /** TODO next packets may need discarded? Or send an ack and wait! */
           /*ret = tcpls_receive(tls, buf, nbytes, tv);*/
         }
+        con = get_con_info_from_socket(tcpls, *socket);
+        assert(con);
+        stream_cleanup(con);
+        con->state = CLOSED;
+        tls->ctx->connection_event_cb(CONN_CLOSED, *socket, tls->ctx->cb_data);
+        close(*socket);
+        list_free(socklist);
         return ret;
       }
       else if (ret == 0) {
         // mark the connection as closed?
+        /** TODO close all streams ?*/
         con = get_con_info_from_socket(tcpls, *socket);
         assert(con);
+        stream_cleanup(con);
         con->state = CLOSED;
         tls->ctx->connection_event_cb(CONN_CLOSED, *socket, tls->ctx->cb_data);
         close(*socket);
@@ -1062,8 +1077,6 @@ ssize_t tcpls_receive(ptls_t *tls, void *buf, size_t nbytes, struct timeval *tv)
       tcpls->socket_rcv = *socket;
       /* We have stuff to decrypts */
       if (ret > 0) {
-        ptls_buffer_t decryptbuf;
-        ptls_buffer_init(&decryptbuf, "", 0);
         list_t *streams_ptr = get_streams_from_socket(tcpls, tcpls->socket_rcv);
         /** The first message over the fist connection, server-side, we do not
          * have streams attach yet, it is coming! */
@@ -1104,13 +1117,15 @@ ssize_t tcpls_receive(ptls_t *tls, void *buf, size_t nbytes, struct timeval *tv)
           list_free(socklist);
           return ret;
         }
-        memcpy(buf, decryptbuf.base, decryptbuf.off);
-        ret = decryptbuf.off;
-        ptls_buffer_dispose(&decryptbuf);
+        memcpy(buf+received_data, decryptbuf.base, decryptbuf.off);
+        received_data += decryptbuf.off;
+        decryptbuf.off = 0;
       }
     }
   }
-  return ret;
+  ptls_buffer_dispose(&decryptbuf);
+  list_free(socklist);
+  return received_data;
 }
 
 /**
@@ -1354,6 +1369,10 @@ static tcpls_stream_t *stream_helper_new(tcpls_t *tcpls, connect_info_t *con) {
   return stream;
 }
 
+static int stream_cleanup(connect_info_t *con) {
+  return 0;
+}
+
 /**
  * Send a message to the peer to 
  *    - initiate a new stream
@@ -1536,10 +1555,12 @@ int handle_tcpls_extension_option(ptls_t *ptls, tcpls_enum_t type,
          return -1;
        }
        /** Note, we current assume only one stream per address */
+       stream->con->state = CLOSED;
        close(stream->con->socket);
-       list_remove(ptls->tcpls->streams, stream);
+       ptls->ctx->stream_event_cb(STREAM_CLOSED, stream->streamid, ptls->ctx->cb_data);
        stream_free(stream);
-       //TODO make an application callback
+       list_remove(ptls->tcpls->streams, stream);
+       ptls->ctx->connection_event_cb(CONN_CLOSED, stream->con->socket, ptls->ctx->cb_data);
        return 0;
       }
       break;
@@ -1827,7 +1848,6 @@ static void stream_free(tcpls_stream_t *stream) {
     return;
   ptls_aead_free(stream->aead_enc);
   ptls_aead_free(stream->aead_dec);
-  free(stream);
 }
 
 /**

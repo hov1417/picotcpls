@@ -80,42 +80,32 @@ struct tcpls_options {
 struct conn_to_tcpls {
   int conn_fd;
   unsigned int wants_to_write : 1;
-  unsigned int mark_for_close : 1;
   tcpls_t *tcpls;
 };
 
 static struct tcpls_options tcpls_options;
-
-
-static void conntcpls_cleanup(list_t *conntcpls) {
-  struct conn_to_tcpls *ctcpls;
-  list_t *to_remove = new_list(sizeof(struct conn_to_tcpls), 2);
-  for (int i = 0; i < conntcpls->size; i++) {
-    ctcpls = list_get(conntcpls, i);
-    if (ctcpls->mark_for_close) {
-      tcpls_free(ctcpls->tcpls);
-      list_add(to_remove, ctcpls);
-    }
-  }
-  for (int i = 0; i < to_remove->size; i++) {
-    ctcpls = list_get(to_remove, i);
-    list_remove(conntcpls, ctcpls);
-  }
-  list_free(to_remove);
-}
 
 /** Simplistic joining procedure for testing */
 static int handle_mpjoin(int socket, uint8_t *connid, uint8_t *cookie, void *cbdata) {
   printf("Wooh, we're handling a mpjoin\n");
   list_t *conntcpls = (list_t*) cbdata;
   struct conn_to_tcpls *ctcpls;
+  struct conn_to_tcpls *ctcpls2;
   for (int i = 0; i < conntcpls->size; i++) {
     ctcpls = list_get(conntcpls, i);
     if (!memcmp(ctcpls->tcpls->connid, connid, 128)) {
+      for (int j = 0; j < conntcpls->size; j++) {
+        ctcpls2 = list_get(conntcpls, j);
+        if (ctcpls2->conn_fd == socket)
+          ctcpls2->tcpls = ctcpls->tcpls;
+      }
       return tcpls_accept(ctcpls->tcpls, socket, cookie);
     }
   }
   return -1;
+}
+
+static int handle_stream_event(tcpls_event_t event, streamid_t streamid, void *cbdata) {
 }
 
 static int handle_connection_event(tcpls_event_t event, int socket, void *cbdata) {
@@ -220,8 +210,14 @@ static int handle_client_connection(tcpls_t *tcpls) {
   /** Make a tcpls mpjoin handshake */
   tcpls_handshake(tcpls->tls, &prop);
   /** Create a stream on the new connection */
-  streamid_t streamid = tcpls_stream_new(tcpls->tls, NULL, (struct sockaddr*) &tcpls->v6_addr_llist->addr);
+  streamid_t streamid = tcpls_stream_new(tcpls->tls, NULL, (struct sockaddr*)
+      &tcpls->v6_addr_llist->addr);
+  tcpls_streams_attach(tcpls->tls, 0, 1);
   tcpls_send(tcpls->tls, streamid, input, 7);
+  tcpls_send(tcpls->tls, 2, input, 7);
+  tcpls_send(tcpls->tls, 1, input, 7);
+  tcpls_send(tcpls->tls, 1, input, 7);
+  tcpls_stream_close(tcpls->tls, streamid, 1);
   sleep(1000);
   return 0;
 }
@@ -452,9 +448,11 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
   int listenfd[nbr_ours];
   list_t *conn_tcpls = new_list(sizeof(struct conn_to_tcpls), 2);
   ctx->connection_event_cb = &handle_connection_event;
+  ctx->stream_event_cb = &handle_stream_event;
   ctx->cb_data = conn_tcpls;
   socklen_t salen;
   struct timeval timeout;
+  list_t *tcpls_l = new_list(sizeof(tcpls_t *),2);
   memset(&timeout, 0, sizeof(struct timeval));
   for (int i = 0; i < nbr_ours; i++) {
     if (sa_ours[i].ss_family == AF_INET) {
@@ -536,10 +534,11 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
             fprintf(stderr, "Accepting a new connection\n");
             tcpls_t *new_tcpls = tcpls_new(ctx,  1);
             struct conn_to_tcpls conntcpls;
+            memset(&conntcpls, 0, sizeof(conntcpls));
             conntcpls.conn_fd = new_conn;
             conntcpls.wants_to_write = 0;
-            conntcpls.mark_for_close = 0;
             conntcpls.tcpls = new_tcpls;
+            list_add(tcpls_l, new_tcpls);
             /** ADD our ips */
             tcpls_add_ips(new_tcpls, sa_ours, NULL, nbr_ours, 0);
             list_add(conn_tcpls, &conntcpls);
@@ -549,14 +548,10 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
         }
       }
       /** Now Read data for all tcpls_t * that wants to read */
-      int ret;
       for (int i = 0; i < conn_tcpls->size; i++) {
         struct conn_to_tcpls *conn = list_get(conn_tcpls, i);
         if (FD_ISSET(conn->conn_fd, &readset)) {
-          ret = handle_tcpls_read(conn->tcpls, conn->conn_fd);
-          if (ret == PTLS_ERROR_HANDSHAKE_IS_MPJOIN) {
-            conn->mark_for_close = 1;
-          }
+          handle_tcpls_read(conn->tcpls, conn->conn_fd);
         }
       }
       /** Write data for all tcpls_t * that wants to write :-) */
@@ -566,8 +561,6 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
           handle_tcpls_write(conn->tcpls, conn->conn_fd);
         }
       }
-      /** Eventually cleanup connection marked for close */
-      conntcpls_cleanup(conn_tcpls);
     }
   }
   else {
@@ -577,6 +570,10 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
         handle_connection(conn_fd, ctx, NULL, input_file, hsprop, request_key_update, 0);
       }
     }
+  }
+  for (int i = 0; i < tcpls_l->size; i++) {
+    tcpls_t *tcpls = list_get(tcpls_l, i);
+    tcpls_free(tcpls);
   }
   list_free(conn_tcpls);
   return 0;

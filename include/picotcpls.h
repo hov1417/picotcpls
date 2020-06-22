@@ -36,7 +36,9 @@ typedef enum tcpls_enum_t {
 
 typedef enum tcpls_event_t {
   CONN_CLOSED,
-  CONN_OPENED
+  CONN_OPENED,
+  STREAM_CLOSED,
+  STREAM_OPENED
 } tcpls_event_t;
 
 typedef enum tcpls_tcp_state_t {
