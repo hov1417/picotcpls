@@ -557,7 +557,7 @@ enum {
     TEST_HANDSHAKE_KEY_UPDATE
 };
 
-static int mpjoin_process(int socket, uint8_t *connid, uint8_t *cookie) {
+static int mpjoin_process(int socket, uint8_t *connid, uint8_t *cookie, void *cb_data) {
     assert(connid);
     assert(cookie);
     return 0;

@@ -79,7 +79,7 @@ static connect_info_t *get_con_info_from_socket(tcpls_t *tcpls, int socket);
 static connect_info_t *get_best_con(tcpls_t *tcpls);
 static int get_con_info_from_addrs(tcpls_t *tcpls, tcpls_v4_addr_t *src,
     tcpls_v4_addr_t *dest, tcpls_v6_addr_t *src6, tcpls_v6_addr_t *dest6,
-    connect_info_t *coninfo);
+    connect_info_t **coninfo);
 static tcpls_v4_addr_t *get_addr_from_sockaddr(tcpls_v4_addr_t *llist, struct sockaddr_in *addr);
 static tcpls_v6_addr_t *get_addr6_from_sockaddr(tcpls_v6_addr_t *llist, struct sockaddr_in6 *addr);
 static connect_info_t *get_primary_con_info(tcpls_t *tcpls);
@@ -507,7 +507,10 @@ int tcpls_handshake(ptls_t *tls, ptls_handshake_properties_t *properties) {
     socket = properties->socket;
   }
   /** Get the right socket */
-  if (!tls->is_server && !socket) {
+  if (!tls->is_server && !socket && properties && properties->client.mpjoin) {
+    //TODO
+  }
+  else if (!tls->is_server && !socket) {
     connect_info_t *con = get_primary_con_info(tcpls);
     if (!con)
       goto Exit;
@@ -518,7 +521,8 @@ int tcpls_handshake(ptls_t *tls, ptls_handshake_properties_t *properties) {
   ptls_buffer_t sendbuf;
   /** Sends the client hello (or the mpjoin client hello */
   ptls_buffer_init(&sendbuf, "", 0);
-  if (!tls->is_server && (ret = ptls_handshake(tls, &sendbuf, NULL, NULL, properties)) == PTLS_ERROR_IN_PROGRESS) {
+  if (!tls->is_server && ((ret = ptls_handshake(tls, &sendbuf, NULL, NULL,
+          properties)) == PTLS_ERROR_IN_PROGRESS || ret == PTLS_ERROR_HANDSHAKE_IS_MPJOIN)) {
     rret = 0;
     while (rret < sendbuf.off) {
       if ((ret = send(socket, sendbuf.base, sendbuf.off, 0)) < 0) {
@@ -560,7 +564,7 @@ int tcpls_handshake(ptls_t *tls, ptls_handshake_properties_t *properties) {
   return ret;
 Exit:
   /** Make callbacks for the different possible errors*/
-  if (rret == 0) {
+  if (rret <= 0) {
     connect_info_t *con = get_con_info_from_socket(tcpls, socket);
     con->state = CLOSED;
     close(socket);
@@ -677,14 +681,14 @@ streamid_t tcpls_stream_new(ptls_t *tls, struct sockaddr *src, struct sockaddr *
     assert(dest_addr); /**debugging mode*/
     if (!dest_addr)
       return 0;
-    ret = get_con_info_from_addrs(tcpls, src_addr, dest_addr, NULL, NULL, &coninfo);
+    ret = get_con_info_from_addrs(tcpls, src_addr, dest_addr, NULL, NULL, &con_stored);
   }
   else if (dest->sa_family == AF_INET6) {
     dest6_addr = get_addr6_from_sockaddr(tcpls->v6_addr_llist, (struct sockaddr_in6 *) dest);
     assert(dest6_addr);
     if (!dest6_addr)
       return 0;
-    ret = get_con_info_from_addrs(tcpls, NULL, NULL, src6_addr, dest6_addr, &coninfo);
+    ret = get_con_info_from_addrs(tcpls, NULL, NULL, src6_addr, dest6_addr, &con_stored);
   }
   else
     return 0;
@@ -724,8 +728,9 @@ streamid_t tcpls_stream_new(ptls_t *tls, struct sockaddr *src, struct sockaddr *
     /** get back this copy */
     con_stored = list_get(tcpls->connect_infos, tcpls->connect_infos->size-1);
   }
-  if (!ret)
+  if (ret)
     con_stored = &coninfo;
+
   tcpls_stream_t *stream = stream_helper_new(tcpls, con_stored);
   if (!stream)
     return 0;
@@ -1266,7 +1271,7 @@ static tcpls_v6_addr_t *get_addr6_from_sockaddr(tcpls_v6_addr_t *llist, struct s
 static int handle_connect(tcpls_t *tcpls, tcpls_v4_addr_t *src, tcpls_v4_addr_t
     *dest, tcpls_v6_addr_t *src6, tcpls_v6_addr_t *dest6, unsigned short afinet,
     int *nfds, connect_info_t *coninfo) {
-  int ret = get_con_info_from_addrs(tcpls, src, dest, src6, dest6, coninfo);
+  int ret = get_con_info_from_addrs(tcpls, src, dest, src6, dest6, &coninfo);
   if (ret) {
     coninfo->socket = 0;
     coninfo->state = CLOSED;
@@ -1777,6 +1782,7 @@ static tcpls_stream_t *stream_new(ptls_t *tls, streamid_t streamid,
   /** Now derive a correct aead context for this stream */
     new_stream_derive_aead_context(tls, stream, is_ours);
     stream->aead_initialized = 1;
+    stream->stream_usable = 1;
   }
   else {
     stream->aead_enc = NULL;
@@ -1855,7 +1861,7 @@ static connect_info_t *get_con_info_from_socket(tcpls_t *tcpls, int socket) {
  */
 static int get_con_info_from_addrs(tcpls_t *tcpls, tcpls_v4_addr_t *src,
     tcpls_v4_addr_t *dest, tcpls_v6_addr_t *src6, tcpls_v6_addr_t *dest6,
-    connect_info_t *coninfo)
+    connect_info_t **coninfo)
 {
   connect_info_t *con;
   for (int i = 0; i < tcpls->connect_infos->size; i++) {
@@ -1863,22 +1869,22 @@ static int get_con_info_from_addrs(tcpls_t *tcpls, tcpls_v4_addr_t *src,
     if (dest && con->dest) {
       if (src && !memcmp(src, con->src, sizeof(*src)) && !memcmp(dest,
             con->dest, sizeof(*dest))) {
-        coninfo = con;
+        *coninfo = con;
         return 0;
       }
       else if (!src && !memcmp(dest, con->dest, sizeof(*dest))) {
-        coninfo = con;
+        *coninfo = con;
         return 0;
       }
     }
     else if (dest6 && con->dest6) {
       if (src6 && !memcmp(src6, con->src6, sizeof(*src6)) && !memcmp(dest6,
             con->dest6, sizeof(*dest6))) {
-        coninfo = con;
+        *coninfo = con;
         return 0;
       }
       else if (!src6  && !memcmp(dest6, con->dest6, sizeof(*dest6))) {
-        coninfo = con;
+        *coninfo = con;
         return 0;
       }
     }
@@ -1927,7 +1933,7 @@ static void _set_primary(tcpls_t *tcpls) {
       has_primary = 1;
       break;
     }
-    if (cmp_times(&primary_con->connect_time, &con->connect_time) < 0)
+    if (cmp_times(&primary_con->connect_time, &con->connect_time) > 0)
       primary_con = con;
   }
   if (has_primary) {

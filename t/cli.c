@@ -80,10 +80,43 @@ struct tcpls_options {
 struct conn_to_tcpls {
   int conn_fd;
   unsigned int wants_to_write : 1;
+  unsigned int mark_for_close : 1;
   tcpls_t *tcpls;
 };
 
 static struct tcpls_options tcpls_options;
+
+
+static void conntcpls_cleanup(list_t *conntcpls) {
+  struct conn_to_tcpls *ctcpls;
+  list_t *to_remove = new_list(sizeof(struct conn_to_tcpls), 2);
+  for (int i = 0; i < conntcpls->size; i++) {
+    ctcpls = list_get(conntcpls, i);
+    if (ctcpls->mark_for_close) {
+      tcpls_free(ctcpls->tcpls);
+      list_add(to_remove, ctcpls);
+    }
+  }
+  for (int i = 0; i < to_remove->size; i++) {
+    ctcpls = list_get(to_remove, i);
+    list_remove(conntcpls, ctcpls);
+  }
+  list_free(to_remove);
+}
+
+/** Simplistic joining procedure for testing */
+static int handle_mpjoin(int socket, uint8_t *connid, uint8_t *cookie, void *cbdata) {
+  printf("Wooh, we're handling a mpjoin\n");
+  list_t *conntcpls = (list_t*) cbdata;
+  struct conn_to_tcpls *ctcpls;
+  for (int i = 0; i < conntcpls->size; i++) {
+    ctcpls = list_get(conntcpls, i);
+    if (!memcmp(ctcpls->tcpls->connid, connid, 128)) {
+      return tcpls_accept(ctcpls->tcpls, socket, cookie);
+    }
+  }
+  return -1;
+}
 
 static int handle_connection_event(tcpls_event_t event, int socket, void *cbdata) {
   list_t *conntcpls = (list_t*) cbdata;
@@ -134,8 +167,13 @@ static int handle_tcpls_read(tcpls_t *tcpls, int socket) {
   int ret;
   if (!ptls_handshake_is_complete(tcpls->tls)) {
     ptls_handshake_properties_t prop = {NULL};
+    memset(&prop, 0, sizeof(prop));
+    prop.received_mpjoin_to_process = &handle_mpjoin;
     prop.socket = socket;
     if ((ret = tcpls_handshake(tcpls->tls, &prop)) != 0) {
+      if (ret == PTLS_ERROR_HANDSHAKE_IS_MPJOIN) {
+        return ret;
+      }
       fprintf(stderr, "tcpls_handshake failed with ret %d\n", ret);
     }
     return 0;
@@ -165,6 +203,26 @@ static int handle_client_connection(tcpls_t *tcpls) {
   handle_tcpls_read(tcpls, 0);
   char input[7] = "coucou\n";
   tcpls_send(tcpls->tls, 0, input, 7);
+  ptls_handshake_properties_t prop = {NULL};
+  prop.client.mpjoin = 1;
+  /** Note: improve tcpls to let it choose itself the socket for the mpjoin
+   * handshake */
+  int socket = 0;
+  connect_info_t *con;
+  for (int i = 0; i < tcpls->connect_infos->size; i++) {
+    con = list_get(tcpls->connect_infos, i);
+    if (con->dest6) {
+      socket = con->socket;
+      break;
+    }
+  }
+  prop.socket = socket;
+  /** Make a tcpls mpjoin handshake */
+  tcpls_handshake(tcpls->tls, &prop);
+  /** Create a stream on the new connection */
+  streamid_t streamid = tcpls_stream_new(tcpls->tls, NULL, (struct sockaddr*) &tcpls->v6_addr_llist->addr);
+  tcpls_send(tcpls->tls, streamid, input, 7);
+  sleep(1000);
   return 0;
 }
 
@@ -480,6 +538,7 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
             struct conn_to_tcpls conntcpls;
             conntcpls.conn_fd = new_conn;
             conntcpls.wants_to_write = 0;
+            conntcpls.mark_for_close = 0;
             conntcpls.tcpls = new_tcpls;
             /** ADD our ips */
             tcpls_add_ips(new_tcpls, sa_ours, NULL, nbr_ours, 0);
@@ -490,10 +549,14 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
         }
       }
       /** Now Read data for all tcpls_t * that wants to read */
+      int ret;
       for (int i = 0; i < conn_tcpls->size; i++) {
         struct conn_to_tcpls *conn = list_get(conn_tcpls, i);
         if (FD_ISSET(conn->conn_fd, &readset)) {
-          handle_tcpls_read(conn->tcpls, conn->conn_fd);
+          ret = handle_tcpls_read(conn->tcpls, conn->conn_fd);
+          if (ret == PTLS_ERROR_HANDSHAKE_IS_MPJOIN) {
+            conn->mark_for_close = 1;
+          }
         }
       }
       /** Write data for all tcpls_t * that wants to write :-) */
@@ -503,6 +566,8 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
           handle_tcpls_write(conn->tcpls, conn->conn_fd);
         }
       }
+      /** Eventually cleanup connection marked for close */
+      conntcpls_cleanup(conn_tcpls);
     }
   }
   else {

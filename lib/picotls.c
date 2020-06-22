@@ -3167,7 +3167,7 @@ static int decode_client_hello(ptls_t *tls, struct st_ptls_client_hello_t *ch,
             src += len;
           });
           assert(properties->received_mpjoin_to_process);
-          if (properties->received_mpjoin_to_process(properties->socket, connid, cookie))
+          if (properties->received_mpjoin_to_process(properties->socket, connid, cookie, tls->ctx->cb_data))
             goto Exit;
         } break;
         case PTLS_EXTENSION_TYPE_PRE_SHARED_KEY: {
