@@ -831,8 +831,8 @@ int tcpls_stream_close(ptls_t *tls, streamid_t streamid, int sendnow) {
   /** queue the message in the sending buffer */
   stream_send_control_message(tcpls, stream->aead_enc, input, STREAM_CLOSE, 4);
   if (sendnow) {
-    connect_info_t *con = get_primary_con_info(tcpls);
-    ret = send(con->socket, tcpls->sendbuf->base+tcpls->send_start,
+    /*connect_info_t *con = get_primary_con_info(tcpls);*/
+    ret = send(stream->con->socket, tcpls->sendbuf->base+tcpls->send_start,
         tcpls->sendbuf->off-tcpls->send_start, 0);
     if (ret < 0) {
       /** Failover ?  */
