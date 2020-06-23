@@ -892,7 +892,7 @@ static int stream_close_helper(tcpls_t *tcpls, tcpls_stream_t *stream, int type,
  * Close a stream. If no stream are attached to any address, then the connection
  * is closed, and the application should call tcpls_free
  */
-int trecpls_stream_close(ptls_t *tls, streamid_t streamid, int sendnow) {
+int tcpls_stream_close(ptls_t *tls, streamid_t streamid, int sendnow) {
   tcpls_t *tcpls = tls->tcpls;
   if (!tcpls->streams->size)
     return 0;
@@ -1129,14 +1129,17 @@ ssize_t tcpls_receive(ptls_t *tls, void *buf, size_t nbytes, struct timeval *tv)
         size_t input_size = ret;
         size_t consumed;
         if (streams_ptr->size == 0) {
-          ptls_aead_context_t *remember_aead = tcpls->tls->traffic_protection.dec.aead;
-          do {
-            consumed = input_size - input_off;
-            rret = ptls_receive(tls, &decryptbuf, input + input_off, &consumed);
-            input_off += consumed;
-          } while (rret == 0 && input_off < input_size);
-          /** We may have received a stream attach that changed the aead*/
-          tcpls->tls->traffic_protection.dec.aead = remember_aead;
+          while (input_off < input_size) {
+            ptls_aead_context_t *remember_aead = tcpls->tls->traffic_protection.dec.aead;
+            do {
+              consumed = input_size - input_off;
+              rret = ptls_receive(tls, &decryptbuf, input + input_off, &consumed);
+              if (rret == 0)
+                input_off += consumed;
+            } while (rret == 0 && input_off < input_size);
+            /** We may have received a stream attach that changed the aead*/
+            tcpls->tls->traffic_protection.dec.aead = remember_aead;
+          }
         }
         else {
 
@@ -1619,7 +1622,7 @@ int handle_tcpls_extension_option(ptls_t *ptls, tcpls_enum_t type,
        tcpls_stream_t *stream = stream_get(ptls->tcpls, streamid);
        if (!stream) {
          /** What to do? this should not happen - Close the connection*/
-         return -1;
+         return PTLS_ERROR_STREAM_NOT_FOUND;
        }
        stream->con->state = CLOSED;
        /** Note, we current assume only one stream per address */

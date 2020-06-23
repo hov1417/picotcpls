@@ -179,14 +179,15 @@ static int handle_tcpls_read(tcpls_t *tcpls, int socket) {
     }
     return 0;
   }
-  char buf[128];
-  memset(buf, 0, 128);
+  char buf[1024];
+  memset(buf, 0, 1024);
   if ((ret = tcpls_receive(tcpls->tls, buf, 128, NULL)) < 0) {
     fprintf(stderr, "tcpls_receive returned %d\n",ret);
     return -1;
   }
   /*sleep(1);*/
-  write(1, buf, ret);
+  /*if (ret > 0)*/
+    /*write(1, buf, ret);*/
   return 0;
 }
 
@@ -226,17 +227,15 @@ static int handle_client_connection(tcpls_t *tcpls) {
   streamid_t streamid = tcpls_stream_new(tcpls->tls, NULL, (struct sockaddr*)
       &tcpls->v6_addr_llist->addr);
   tcpls_streams_attach(tcpls->tls, 0, 1);
-  tcpls_send(tcpls->tls, streamid, input, 7);
-  tcpls_send(tcpls->tls, streamid, input, 7);
-  sleep(100);
-  /*if (tcpls_stream_close(tcpls->tls, streamid, 1) < 0)*/
-    /*fprintf(stderr, "tcpls_stream_close error\n");*/
-  /*int ret;*/
-  /*char buf[16384];*/
-  /*if ((ret = tcpls_receive(tcpls->tls, buf, 16384, NULL)) <  0) {*/
-    /*fprintf(stderr, "tcpls_receive returned %d",ret);*/
-    /*return -1;*/
-  /*}*/
+  tcpls_send(tcpls->tls, 1, input, 7);
+  if (tcpls_stream_close(tcpls->tls, streamid, 1) < 0)
+    fprintf(stderr, "tcpls_stream_close error\n");
+  int ret;
+  char buf[16384];
+  if ((ret = tcpls_receive(tcpls->tls, buf, 16384, NULL)) <  0) {
+    fprintf(stderr, "tcpls_receive returned %d",ret);
+    return -1;
+  }
   return 0;
 }
 
@@ -470,6 +469,7 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
   ctx->cb_data = conn_tcpls;
   socklen_t salen;
   struct timeval timeout;
+  ctx->output_decrypted_tcpls_data = 0;
   list_t *tcpls_l = new_list(sizeof(tcpls_t *),2);
   memset(&timeout, 0, sizeof(struct timeval));
   for (int i = 0; i < nbr_ours; i++) {
@@ -609,6 +609,7 @@ static int run_client(struct sockaddr_storage *sa_our, struct sockaddr_storage
   tcpls_t *tcpls = tcpls_new(ctx, 0);
   tcpls_add_ips(tcpls, sa_our, sa_peer, nbr_our, nbr_peer);
   struct timeval timeout;
+  ctx->output_decrypted_tcpls_data = 0;
   timeout.tv_sec = 5;
   timeout.tv_usec = 0;
   int err = tcpls_connect(tcpls->tls, NULL, NULL, &timeout);
