@@ -86,26 +86,37 @@ struct conn_to_tcpls {
 static struct tcpls_options tcpls_options;
 
 /** Simplistic joining procedure for testing */
-static int handle_mpjoin(int socket, uint8_t *connid, uint8_t *cookie, void *cbdata) {
+static int handle_mpjoin(int socket, uint8_t *connid, uint8_t *cookie, uint32_t transportid, void *cbdata) {
   printf("Wooh, we're handling a mpjoin\n");
   list_t *conntcpls = (list_t*) cbdata;
   struct conn_to_tcpls *ctcpls;
   struct conn_to_tcpls *ctcpls2;
   for (int i = 0; i < conntcpls->size; i++) {
     ctcpls = list_get(conntcpls, i);
-    if (!memcmp(ctcpls->tcpls->connid, connid, 128)) {
+    if (!memcmp(ctcpls->tcpls->connid, connid, CONNID_LEN)) {
       for (int j = 0; j < conntcpls->size; j++) {
         ctcpls2 = list_get(conntcpls, j);
         if (ctcpls2->conn_fd == socket)
           ctcpls2->tcpls = ctcpls->tcpls;
       }
-      return tcpls_accept(ctcpls->tcpls, socket, cookie);
+      return tcpls_accept(ctcpls->tcpls, socket, cookie, transportid);
     }
   }
   return -1;
 }
 
+static int handle_client_stream_event(tcpls_event_t event, streamid_t streamid, void *cbdata) {
+  switch (event) {
+    case STREAM_CLOSED:
+      printf("Stream closed");
+      break;
+    default: break;
+  }
+  return 0;
+}
 static int handle_stream_event(tcpls_event_t event, streamid_t streamid, void *cbdata) {
+  printf("received Stream event");
+  return 0;
 }
 
 static int handle_connection_event(tcpls_event_t event, int socket, void *cbdata) {
@@ -168,9 +179,10 @@ static int handle_tcpls_read(tcpls_t *tcpls, int socket) {
     }
     return 0;
   }
-  char buf[16384];
-  if ((ret = tcpls_receive(tcpls->tls, buf, 16384, NULL)) <  0) {
-    fprintf(stderr, "tcpls_receive returned %d",ret);
+  char buf[128];
+  memset(buf, 0, 128);
+  if ((ret = tcpls_receive(tcpls->tls, buf, 128, NULL)) < 0) {
+    fprintf(stderr, "tcpls_receive returned %d\n",ret);
     return -1;
   }
   /*sleep(1);*/
@@ -207,6 +219,7 @@ static int handle_client_connection(tcpls_t *tcpls) {
     }
   }
   prop.socket = socket;
+  prop.client.transportid = con->this_transportid;
   /** Make a tcpls mpjoin handshake */
   tcpls_handshake(tcpls->tls, &prop);
   /** Create a stream on the new connection */
@@ -214,11 +227,16 @@ static int handle_client_connection(tcpls_t *tcpls) {
       &tcpls->v6_addr_llist->addr);
   tcpls_streams_attach(tcpls->tls, 0, 1);
   tcpls_send(tcpls->tls, streamid, input, 7);
-  tcpls_send(tcpls->tls, 2, input, 7);
-  tcpls_send(tcpls->tls, 1, input, 7);
-  tcpls_send(tcpls->tls, 1, input, 7);
-  tcpls_stream_close(tcpls->tls, streamid, 1);
-  sleep(1000);
+  tcpls_send(tcpls->tls, streamid, input, 7);
+  sleep(100);
+  /*if (tcpls_stream_close(tcpls->tls, streamid, 1) < 0)*/
+    /*fprintf(stderr, "tcpls_stream_close error\n");*/
+  /*int ret;*/
+  /*char buf[16384];*/
+  /*if ((ret = tcpls_receive(tcpls->tls, buf, 16384, NULL)) <  0) {*/
+    /*fprintf(stderr, "tcpls_receive returned %d",ret);*/
+    /*return -1;*/
+  /*}*/
   return 0;
 }
 
@@ -542,7 +560,7 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
             /** ADD our ips */
             tcpls_add_ips(new_tcpls, sa_ours, NULL, nbr_ours, 0);
             list_add(conn_tcpls, &conntcpls);
-            if (tcpls_accept(new_tcpls, conntcpls.conn_fd, NULL) < 0)
+            if (tcpls_accept(new_tcpls, conntcpls.conn_fd, NULL, 0) < 0)
               fprintf(stderr, "tcpls_accept returned -1");
           }
         }
@@ -587,7 +605,7 @@ static int run_client(struct sockaddr_storage *sa_our, struct sockaddr_storage
   int fd;
 
   hsprop->client.esni_keys = resolve_esni_keys(server_name);
-
+  ctx->stream_event_cb = &handle_client_stream_event;
   tcpls_t *tcpls = tcpls_new(ctx, 0);
   tcpls_add_ips(tcpls, sa_our, sa_peer, nbr_our, nbr_peer);
   struct timeval timeout;

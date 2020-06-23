@@ -20,6 +20,9 @@
 #define STREAM_SENDER_NEW_STREAM_SIZE 4
 #define STREAM_CLOSE_SIZE 4
 
+#define COOKIE_LEN 16
+#define CONNID_LEN 16
+
 /** TCP options we would support in the TLS context */
 typedef enum tcpls_enum_t {
   BPF_CC,
@@ -31,7 +34,9 @@ typedef enum tcpls_enum_t {
   MULTIHOMING_v4,
   USER_TIMEOUT,
   STREAM_ATTACH,
-  STREAM_CLOSE
+  STREAM_CLOSE,
+  STREAM_CLOSE_ACK,
+  TRANSPORT_NEW
 } tcpls_enum_t;
 
 typedef enum tcpls_event_t {
@@ -73,6 +78,8 @@ typedef struct st_tcpls_v6_addr_t {
 typedef struct st_connect_info_t {
   tcpls_tcp_state_t state; /* Connection state */
   int socket;
+  uint32_t this_transportid;
+  uint32_t peer_transportid;
   unsigned is_primary : 1;
   struct timeval connect_time;
   /** Only one is used */
@@ -165,6 +172,8 @@ struct st_tcpls_t {
   list_t *connect_infos;
   /** value of the next stream id :) */
   uint32_t next_stream_id;
+  /** value of the next transport id */
+  uint32_t next_transport_id;
   /** count the number of times we attached a stream from the peer*/
   uint32_t nbr_of_peer_streams_attached;
   
@@ -195,7 +204,7 @@ int tcpls_connect(ptls_t *tls, struct sockaddr *src, struct sockaddr *dest,
 
 int tcpls_handshake(ptls_t *tls, ptls_handshake_properties_t *properties);
 
-int tcpls_accept(tcpls_t *tcpls, int socket, uint8_t *cookie);
+int tcpls_accept(tcpls_t *tcpls, int socket, uint8_t *cookie, uint32_t transportid);
 
 int tcpls_add_v4(ptls_t *tls, struct sockaddr_in *addr, int is_primary, int
     settopeer, int is_ours);

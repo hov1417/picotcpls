@@ -174,6 +174,8 @@ extern "C" {
 #define PTLS_ERROR_DELEGATE (PTLS_ERROR_CLASS_INTERNAL + 10)
 #define PTLS_ERROR_STREAM_NOT_FOUND (PTLS_ERROR_CLASS_INTERNAL + 11)
 #define PTLS_ERROR_HANDSHAKE_IS_MPJOIN (PTLS_ERROR_CLASS_INTERNAL + 12)
+#define PTLS_ERROR_CONN_NOT_FOUND (PTLS_ERROR_CLASS_INTERNAL + 13)
+
 
 #define PTLS_ERROR_INCORRECT_BASE64 (PTLS_ERROR_CLASS_INTERNAL + 50)
 #define PTLS_ERROR_PEM_LABEL_NOT_FOUND (PTLS_ERROR_CLASS_INTERNAL + 51)
@@ -896,6 +898,11 @@ typedef struct st_ptls_log_event_t {
          */
         unsigned mpjoin : 1;
         /**
+         * transport identification for any control message sent over a given
+         * TCP connection, but which must concert a another TCP connection
+         */
+        uint32_t transportid;
+        /**
          * ESNIKeys (the value of the TXT record, after being base64-"decoded")
          */
         ptls_iovec_t esni_keys;
@@ -948,7 +955,7 @@ typedef struct st_ptls_log_event_t {
     /**
      * A callback used when a mpjoin is received
      */
-    int (*received_mpjoin_to_process)(int socket, uint8_t *connid, uint8_t *cookie, void *cb_data);
+    int (*received_mpjoin_to_process)(int socket, uint8_t *connid, uint8_t *cookie, uint32_t transportid, void *cb_data);
     /**
      * TCPLS handshake socket
      */

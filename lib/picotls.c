@@ -1699,12 +1699,13 @@ static int send_client_hello(ptls_t *tls, ptls_message_emitter_t *emitter, ptls_
             if (properties != NULL && properties->client.mpjoin) {
                 buffer_push_extension(sendbuf, PTLS_EXTENSION_TYPE_MPJOIN, {
                     ptls_buffer_push_block(sendbuf, 1, {
-                        ptls_buffer_pushv(sendbuf, tls->tcpls->connid, 128);
+                        ptls_buffer_pushv(sendbuf, tls->tcpls->connid, CONNID_LEN);
+                        ptls_buffer_pushv(sendbuf, &properties->client.transportid, 4);
                     });
                     ptls_buffer_push_block(sendbuf, 1, {
                         uint8_t *cookie = list_get(tls->tcpls->cookies, tls->tcpls->cookies->size-1);
                         assert(cookie);
-                        ptls_buffer_pushv(sendbuf, cookie, 128);
+                        ptls_buffer_pushv(sendbuf, cookie, COOKIE_LEN);
                         list_remove(tls->tcpls->cookies, cookie);
                     });
                 });
@@ -3153,12 +3154,16 @@ static int decode_client_hello(ptls_t *tls, struct st_ptls_client_hello_t *ch,
             });
             break;
         case PTLS_EXTENSION_TYPE_MPJOIN: {
-          uint8_t connid[128];
-          uint8_t cookie[128];
+          uint8_t connid[CONNID_LEN];
+          uint8_t cookie[COOKIE_LEN];
+          uint32_t transportid;
           did_we_received_mpjoin = 1;
           ptls_decode_open_block(src, end, 1, {
-            size_t len = end - src;
+            size_t len = CONNID_LEN;
             memcpy(connid, src, len);
+            src += len;
+            len = sizeof(uint32_t);
+            memcpy(&transportid, src, len);
             src += len;
           });
           ptls_decode_block(src, end, 1, {
@@ -3167,7 +3172,7 @@ static int decode_client_hello(ptls_t *tls, struct st_ptls_client_hello_t *ch,
             src += len;
           });
           assert(properties->received_mpjoin_to_process);
-          if (properties->received_mpjoin_to_process(properties->socket, connid, cookie, tls->ctx->cb_data))
+          if (properties->received_mpjoin_to_process(properties->socket, connid, cookie, transportid, tls->ctx->cb_data))
             goto Exit;
         } break;
         case PTLS_EXTENSION_TYPE_PRE_SHARED_KEY: {
@@ -3795,7 +3800,7 @@ static int server_handle_hello(ptls_t *tls, ptls_message_emitter_t *emitter, ptl
               buffer_push_extension(sendbuf, PTLS_EXTENSION_TYPE_ENCRYPTED_CONNID, {
                   ptls_buffer_push_block(sendbuf, 2, {
                       ptls_buffer_push_block(sendbuf, 1, {
-                        ptls_buffer_pushv(sendbuf, tls->tcpls->connid, 128);
+                        ptls_buffer_pushv(sendbuf, tls->tcpls->connid, CONNID_LEN);
                       });
                   });
               });
@@ -3806,7 +3811,7 @@ static int server_handle_hello(ptls_t *tls, ptls_message_emitter_t *emitter, ptl
                 buffer_push_extension(sendbuf, PTLS_EXTENSION_TYPE_ENCRYPTED_COOKIE, {
                     ptls_buffer_push_block(sendbuf, 2, {
                         ptls_buffer_push_block(sendbuf, 1, {
-                          ptls_buffer_pushv(sendbuf, cookie, 128);
+                          ptls_buffer_pushv(sendbuf, cookie, COOKIE_LEN);
                         });
                     });
                 });
