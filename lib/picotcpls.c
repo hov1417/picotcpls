@@ -304,11 +304,9 @@ int tcpls_connect(ptls_t *tls, struct sockaddr *src, struct sockaddr *dest,
     tcpls_v4_addr_t *current_v4 = tcpls->v4_addr_llist;
     tcpls_v6_addr_t *current_v6 = tcpls->v6_addr_llist;
     while (current_v4 || current_v6) {
-      printf("connect 1\n");
       tcpls_v4_addr_t *ours_current_v4 = tcpls->ours_v4_addr_llist;
       tcpls_v6_addr_t *ours_current_v6 = tcpls->ours_v6_addr_llist;
       do {
-        printf("connect 2\n");
         if (current_v4) {
           if (handle_connect(tcpls, ours_current_v4, current_v4, NULL, NULL, AF_INET, &nfds, &coninfo) < 0) {
             return -1;
