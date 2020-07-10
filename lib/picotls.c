@@ -4025,12 +4025,17 @@ static int parse_record_header(struct st_ptls_record_t *rec, const uint8_t *src)
     return 0;
 }
 
-static int parse_record(ptls_t *tls, struct st_ptls_record_t *rec, const uint8_t
+static int parse_record(ptls_t *tls, ptls_buffer_t *streambuf, struct st_ptls_record_t *rec, const uint8_t
     *src, size_t *len)
 {
     int ret;
     int offset = 5;
-    if (tls->recvbuf.rec.base == NULL && *len >= offset) {
+    ptls_buffer_t *buffrag;
+    if (streambuf)
+      buffrag = streambuf;
+    else
+      buffrag = &tls->recvbuf.rec;
+    if (buffrag->base == NULL && *len >= offset) {
       /* fast path */
       if ((ret = parse_record_header(rec, src)) != 0)
           return ret;
@@ -4040,43 +4045,42 @@ static int parse_record(ptls_t *tls, struct st_ptls_record_t *rec, const uint8_t
         return 0;
       }
     }
-
     /* slow path */
     const uint8_t *const end = src + *len;
     *rec = (struct st_ptls_record_t){0};
 
-    if (tls->recvbuf.rec.base == NULL) {
-        ptls_buffer_init(&tls->recvbuf.rec, "", 0);
-        if ((ret = ptls_buffer_reserve(&tls->recvbuf.rec, offset)) != 0)
+    if (buffrag->base == NULL) {
+        ptls_buffer_init(buffrag, "", 0);
+        if ((ret = ptls_buffer_reserve(buffrag, offset)) != 0)
             return ret;
     }
 
     /* fill and parse the header */
-    while (tls->recvbuf.rec.off < offset) {
+    while (buffrag->off < offset) {
         if (src == end)
             return PTLS_ERROR_IN_PROGRESS;
-        tls->recvbuf.rec.base[tls->recvbuf.rec.off++] = *src++;
+        buffrag->base[buffrag->off++] = *src++;
     }
-    if ((ret = parse_record_header(rec, tls->recvbuf.rec.base)) != 0)
+    if ((ret = parse_record_header(rec, buffrag->base)) != 0)
         return ret;
 
     /* fill the fragment */
-    size_t addlen = rec->length + offset - tls->recvbuf.rec.off;
+    size_t addlen = rec->length + offset - buffrag->off;
     if (addlen != 0) {
-        if ((ret = ptls_buffer_reserve(&tls->recvbuf.rec, addlen)) != 0)
+        if ((ret = ptls_buffer_reserve(buffrag, addlen)) != 0)
             return ret;
         if (addlen > (size_t)(end - src))
             addlen = end - src;
         if (addlen != 0) {
-            memcpy(tls->recvbuf.rec.base + tls->recvbuf.rec.off, src, addlen);
-            tls->recvbuf.rec.off += addlen;
+            memcpy(buffrag->base + buffrag->off, src, addlen);
+            buffrag->off += addlen;
             src += addlen;
         }
     }
 
     /* set rec->fragment if a complete record has been parsed */
-    if (tls->recvbuf.rec.off == rec->length + offset) {
-        rec->fragment = tls->recvbuf.rec.base + offset;
+    if (buffrag->off == rec->length + offset) {
+        rec->fragment = buffrag->base + offset;
         ret = 0;
     } else {
         ret = PTLS_ERROR_IN_PROGRESS;
@@ -4507,7 +4511,7 @@ static int handle_handshake_record(ptls_t *tls,
 }
 
 static int handle_input(ptls_t *tls, ptls_message_emitter_t *emitter,
-    ptls_buffer_t *decryptbuf, const void *input, size_t *inlen,
+    ptls_buffer_t *decryptbuf, ptls_buffer_t *streambuf, const void *input, size_t *inlen,
     ptls_handshake_properties_t *properties)
 {
     struct st_ptls_record_t rec;
@@ -4515,7 +4519,7 @@ static int handle_input(ptls_t *tls, ptls_message_emitter_t *emitter,
     int offset = 5;
 
     /* extract the record */
-    if ((ret = parse_record(tls, &rec, input, inlen)) != 0)
+    if ((ret = parse_record(tls, streambuf, &rec, input, inlen)) != 0)
         return ret;
     assert(rec.fragment != NULL);
 
@@ -4599,7 +4603,10 @@ static int handle_input(ptls_t *tls, ptls_message_emitter_t *emitter,
         }
     }
 NextRecord:
-    ptls_buffer_dispose(&tls->recvbuf.rec);
+    if (streambuf)
+      ptls_buffer_dispose(streambuf);
+    else
+      ptls_buffer_dispose(&tls->recvbuf.rec);
     return ret;
 
 ServerSkipEarlyData:
@@ -4664,7 +4671,7 @@ int ptls_handshake(ptls_t *tls, ptls_buffer_t *_sendbuf, const void *input,
     ret = PTLS_ERROR_IN_PROGRESS;
     while (ret == PTLS_ERROR_IN_PROGRESS && src != src_end) {
         size_t consumed = src_end - src;
-        ret = handle_input(tls, &emitter.super, &decryptbuf, src, &consumed, properties);
+        ret = handle_input(tls, &emitter.super, &decryptbuf, NULL, src, &consumed, properties);
         src += consumed;
         assert(decryptbuf.off == 0);
     }
@@ -4693,7 +4700,8 @@ int ptls_handshake(ptls_t *tls, ptls_buffer_t *_sendbuf, const void *input,
     return ret;
 }
 
-int ptls_receive(ptls_t *tls, ptls_buffer_t *decryptbuf, const void *_input, size_t *inlen)
+int ptls_receive(ptls_t *tls, ptls_buffer_t *decryptbuf, ptls_buffer_t
+    *streambuf, const void *_input, size_t *inlen)
 {
     const uint8_t *input = (const uint8_t *)_input, *const end = input + *inlen;
     size_t decryptbuf_orig_size = decryptbuf->off;
@@ -4704,7 +4712,7 @@ int ptls_receive(ptls_t *tls, ptls_buffer_t *decryptbuf, const void *_input, siz
     /* loop until we decrypt some application data (or an error) */
     while (ret == 0 && input != end && decryptbuf_orig_size == decryptbuf->off) {
         size_t consumed = end - input;
-        ret = handle_input(tls, NULL, decryptbuf, input, &consumed, NULL);
+        ret = handle_input(tls, NULL, decryptbuf, streambuf, input, &consumed, NULL);
         input += consumed;
 
         switch (ret) {

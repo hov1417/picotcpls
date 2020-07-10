@@ -13,9 +13,11 @@
 
 tcpls_record_fifo_t *tcpls_record_queue_new(int max_record_num) {
   tcpls_record_fifo_t *fifo = malloc(sizeof(*fifo));
+  memset(fifo, 0, sizeof(*fifo));
   if (fifo == NULL)
     return NULL;
   fifo->queue = malloc(max_record_num*sizeof(struct st_ptls_record_t));
+  memset(fifo->queue, 0, max_record_num*sizeof(struct st_ptls_record_t));
   if (fifo->queue == NULL)
     goto Exit;
   fifo->size = 0;

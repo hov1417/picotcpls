@@ -323,12 +323,12 @@ extern "C" {
   /**
    * used for storing output
    */
-  typedef struct st_ptls_buffer_t {
+  struct st_ptls_buffer_t {
     uint8_t *base;
     size_t capacity;
     size_t off;
     int is_allocated;
-  } ptls_buffer_t;
+  };
 
   /**
    * key exchange context built by ptls_key_exchange_algorithm::create.
@@ -833,11 +833,11 @@ typedef struct st_ptls_log_event_t {
     /**
      * A callback used when a stream event occurs
      */
-    int (*stream_event_cb)(tcpls_event_t event, streamid_t streamid, void *cb_data);
+    int (*stream_event_cb)(tcpls_event_t event, streamid_t streamid, int transportid, void *cb_data);
     /**
      * A callback used when a connection event occurs
      */
-    int (*connection_event_cb)(tcpls_event_t event, int socket, void *cb_data);
+    int (*connection_event_cb)(tcpls_event_t event, int socket, int transportid, void *cb_data);
     /**
      * Optional data to be passed to the callback functions
      */
@@ -1526,7 +1526,7 @@ int ptls_handshake(ptls_t *tls, ptls_buffer_t *sendbuf, const void *input, size_
 /**
  * decrypts the first record within given buffer
  */
-int ptls_receive(ptls_t *tls, ptls_buffer_t *plaintextbuf, const void *input, size_t *len);
+int ptls_receive(ptls_t *tls, ptls_buffer_t *plaintextbuf, ptls_buffer_t *streambuf, const void *input, size_t *len);
 /**
  * encrypts given buffer into multiple TLS records
  */

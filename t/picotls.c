@@ -687,7 +687,7 @@ static void test_handshake(ptls_iovec_t ticket, int mode, int expect_ticket, int
         cbuf.off -= consumed;
 
         consumed = cbuf.off;
-        ret = ptls_receive(server, &decbuf, cbuf.base, &consumed);
+        ret = ptls_receive(server, &decbuf, NULL, cbuf.base, &consumed);
         ok(ret == 0);
         ok(consumed == cbuf.off);
         ok(decbuf.off == strlen(req));
@@ -740,7 +740,7 @@ static void test_handshake(ptls_iovec_t ticket, int mode, int expect_ticket, int
         ok(ret == 0);
 
         consumed = cbuf.off;
-        ret = ptls_receive(server, &decbuf, cbuf.base, &consumed);
+        ret = ptls_receive(server, &decbuf, NULL, cbuf.base, &consumed);
         ok(ret == 0);
         ok(consumed == cbuf.off);
         ok(decbuf.off == strlen(req));
@@ -754,7 +754,7 @@ static void test_handshake(ptls_iovec_t ticket, int mode, int expect_ticket, int
     }
 
     consumed = sbuf.off;
-    ret = ptls_receive(client, &decbuf, sbuf.base, &consumed);
+    ret = ptls_receive(client, &decbuf, NULL, sbuf.base, &consumed);
     ok(ret == 0);
     ok(consumed == sbuf.off);
     ok(decbuf.off == strlen(resp));
@@ -765,7 +765,7 @@ static void test_handshake(ptls_iovec_t ticket, int mode, int expect_ticket, int
 
     if (mode == TEST_HANDSHAKE_EARLY_DATA) {
         consumed = cbuf.off;
-        ret = ptls_receive(server, &decbuf, cbuf.base, &consumed);
+        ret = ptls_receive(server, &decbuf, NULL, cbuf.base, &consumed);
         ok(ret == 0);
         ok(cbuf.off == consumed);
         ok(decbuf.off == 0);
@@ -784,7 +784,7 @@ static void test_handshake(ptls_iovec_t ticket, int mode, int expect_ticket, int
         ok(!server->needs_key_update);
         ok(!server->key_update_send_request);
         consumed = sbuf.off;
-        ret = ptls_receive(client, &decbuf, sbuf.base, &consumed);
+        ret = ptls_receive(client, &decbuf, NULL, sbuf.base, &consumed);
         ok(ret == 0);
         ok(sbuf.off == consumed);
         ok(decbuf.off == 8);
@@ -796,7 +796,7 @@ static void test_handshake(ptls_iovec_t ticket, int mode, int expect_ticket, int
         ret = ptls_send(client, &cbuf, "hello", 5);
         ok(ret == 0);
         consumed = cbuf.off;
-        ret = ptls_receive(server, &decbuf, cbuf.base, &consumed);
+        ret = ptls_receive(server, &decbuf, NULL, cbuf.base, &consumed);
         ok(ret == 0);
         ok(cbuf.off == consumed);
         ok(decbuf.off == 5);
@@ -1072,7 +1072,7 @@ static void test_enforce_retry(int use_cookie)
     ok(ret == 0);
 
     consumed = cbuf.off;
-    ret = ptls_receive(server, &decbuf, cbuf.base, &consumed);
+    ret = ptls_receive(server, &decbuf, NULL, cbuf.base, &consumed);
     ok(ret == 0);
     ok(cbuf.off == consumed);
     cbuf.off = 0;
@@ -1241,7 +1241,7 @@ static void test_sends_varlen_bpf_prog(void)
   ret = ptls_send_tcpoption(server, &sbuf, BPF_CC);
   ok(ret == 0);
   consumed = sbuf.off; 
-  ret = ptls_receive(client, &decbuf, sbuf.base, &consumed);
+  ret = ptls_receive(client, &decbuf, NULL, sbuf.base, &consumed);
   ok(ret == 0);
   /*ptls_buffer_dispose(&decbuf);*/
   ctx->support_tcpls_options = 0;
@@ -1369,7 +1369,7 @@ static void test_sends_tcpls_record(void)
   consumed = cbuf.off;
   ok(ret == 0);
   
-  ret = ptls_receive(server, &decbuf, cbuf.base, &consumed);
+  ret = ptls_receive(server, &decbuf, NULL, cbuf.base, &consumed);
   ok(ret==0);
   decbuf.off = 0;
   cbuf.off = 0;
@@ -2181,7 +2181,7 @@ static void test_tcpls_stream_api(void)
   ok(tcpls_server->streams->size == 0);
   do {
     consumed = input_size - input_off;
-    ret = ptls_receive(server, &decbuf, tcpls->sendbuf->base + input_off, &consumed);
+    ret = ptls_receive(server, &decbuf, NULL, tcpls->sendbuf->base + input_off, &consumed);
     input_off += consumed;
   } while (ret == 0 && input_off < input_size);
   ok(ret == 0 || ret == PTLS_ERROR_CONN_NOT_FOUND);

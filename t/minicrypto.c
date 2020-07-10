@@ -120,7 +120,7 @@ static void test_hrr(void)
     ok(ret == 0);
 
     consumed = cbuf.off;
-    ret = ptls_receive(server, &decbuf, cbuf.base, &consumed);
+    ret = ptls_receive(server, &decbuf, NULL, cbuf.base, &consumed);
     ok(ret == 0);
     ok(consumed == cbuf.off);
     cbuf.off = 0;

@@ -98,6 +98,8 @@ typedef struct st_tcpls_stream {
    **/
   tcpls_record_fifo_t *send_queue;
   streamid_t streamid;
+
+  ptls_buffer_t *streambuf;
   /** when this stream should first send an attach event before
    * sending any packet */
   unsigned need_sending_attach_event  : 1;
@@ -184,6 +186,8 @@ struct st_tcpls_t {
   int socket_primary;
   /** remember on which socket we pulled out bytes */
   int socket_rcv;
+  /** the very initial socket used for the handshake */
+  int initial_socket;
   /**
    * Set to 1 if the other peer also announced it supports Encrypted TCP
    * options
