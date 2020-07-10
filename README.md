@@ -41,10 +41,13 @@ The mere existence of this research comes from several observations:
 
 The goal of TCPLS is threefold:
 
-* Providing a simple API to the application layer
+* Providing a simple API to the application for potentially complex
+  transport layer operations (e.g., connection migration or multipathing)
 * Showing that alternative extensibility mechanisms can be powerful
 * Showing the quest for maximum Web performance with QUIC can be matched by
   TCPLS, or even improved under several metrics.
+
+/!\ There are many bugs left, and the API may evolve over time 
 
 Like picotls, the implementation of picotcpls is licensed under the MIT license.
 
@@ -234,10 +237,32 @@ TODO
 
 ### Adding / closing streams
 
-TODO
+The API allows the application to attach streams to connections (note,
+src and dest would further be replaced by a transport connection
+wrapper). If no streams are created, TCPLS will send a control message
+alongside the first bytes of application data sent with `tcpls_send`
+
+`streamid_t tcpls_stream_new(tcpls_t *tcpls, struct sockaddr *src, struct sockaddr *dest)`
+
+Streams need to be attached before we can use them:
+
+`int tcpls_streams_attach(tcpls_t *tcpls, streamid_t streamid, int
+sendnow)`
+
+streamid being the streamid in which the control message will be sent;
+leave to 0 for default.
+
+Then, TCPLS would close the underlying transport connection when no
+streams are attached anymore. When calling
+
+`tcpls_stream_close(tcpls_t *tls, streamid_t streamid, int sendnow)`,
+tcpls would try to detach and close the stream streamid, and eventually
+close the TCP connection if no stream are attached anymore.
+
 
 ### Sending / receiving data
 
+TCPLS gives a simple `tcpls_send` and `tcpls_receive` interface
 TODO
 
 ### Handling events
