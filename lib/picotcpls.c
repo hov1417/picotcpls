@@ -302,10 +302,10 @@ int tcpls_connect(ptls_t *tls, struct sockaddr *src, struct sockaddr *dest,
   if (!src && !dest) {
     // FULL MESH CONNECT
     tcpls_v4_addr_t *current_v4 = tcpls->v4_addr_llist;
-    tcpls_v4_addr_t *ours_current_v4 = tcpls->ours_v4_addr_llist;
     tcpls_v6_addr_t *current_v6 = tcpls->v6_addr_llist;
-    tcpls_v6_addr_t *ours_current_v6 = tcpls->ours_v6_addr_llist;
     while (current_v4 || current_v6) {
+      tcpls_v4_addr_t *ours_current_v4 = tcpls->ours_v4_addr_llist;
+      tcpls_v6_addr_t *ours_current_v6 = tcpls->ours_v6_addr_llist;
       do {
         if (current_v4) {
           if (handle_connect(tcpls, ours_current_v4, current_v4, NULL, NULL, AF_INET, &nfds, &coninfo) < 0) {
@@ -317,16 +317,16 @@ int tcpls_connect(ptls_t *tls, struct sockaddr *src, struct sockaddr *dest,
             return -1;
           }
         }
-        /** move forward */
-        if (current_v4)
-          current_v4 = current_v4->next;
-        if (current_v6)
-          current_v6 = current_v6->next;
+        /** move forward */    
+        if (ours_current_v4)
+          ours_current_v4 = ours_current_v4->next;
+        if (ours_current_v6)
+          ours_current_v6 = ours_current_v6->next;
       } while (ours_current_v4 || ours_current_v6);
-      if (ours_current_v4)
-        ours_current_v4 = ours_current_v4->next;
-      if (ours_current_v6)
-        ours_current_v6 = ours_current_v6->next;
+      if (current_v4)
+          current_v4 = current_v4->next;
+      if (current_v6)
+          current_v6 = current_v6->next;
     }
   }
   else if (src && !dest) {
