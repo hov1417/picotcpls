@@ -136,8 +136,8 @@ sent during this connection. This restriction is designed to avoid
 making more entropy for fingerprinting, avoiding the client-side handshake to look
 different depending on the number of encrypted addresses advertized.  
 
-If these functions nare called after the handshake, then the application
-can either call `tcpls_send_addresses` to send addresses right away or
+If these functions are called after the handshake, then the application
+can either call `tcpls_send_transport_opt` to send addresses right away or
 wait the next exchange of application-level data, in which new addresses
 will be also included.
 
@@ -218,21 +218,31 @@ received MPJOIN, alongside the received one-time cookie and the socket
 in which this MPJOIN handshake was received. In this case
 tcpls_handshake() will return PTLS_ERROR_HANDSHAKE_IS_MPJOIN to indicate
 the server that this handshake wasn't from a new client. The server can
-the call `tcpls_mpjoin_accept(tcpls_t *tcpls, int socket, uint8_t
-*cookie)` assuming it stored a mapping between connid and tcpls_t*. This
+the call `tcpls_accept(tcpls_t *tcpls, int socket, uint8_t
+*cookie, unint32_t transportid)` assuming it stored a mapping between connid and tcpls_t*. This
 function would properly link the TCP connection to the given tcpls
 session if the cookie is valid.
 
 
 #### Handshake properties
 
+A set of handshake properties can be configured, which influences the
+behaviour of `tcpls_handshake()` such as connecting in 0-RTT TCP+TLS,
+connecting in 0-RTT in TLS only, joining an existing connection, etc.
+
+TODO
+
 ### Adding / closing streams
 
-Streams can be 
+TODO
 
 ### Sending / receiving data
 
+TODO
+
 ### Handling events
+
+TODO
 
 Using the cli command
 ---
