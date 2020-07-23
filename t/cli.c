@@ -320,7 +320,7 @@ static int handle_client_connection(tcpls_t *tcpls, struct cli_data *data) {
           mB_received++;
           printf("Received %d MB\n",mB_received);
         }
-        break;
+        /*break;*/
       }
     }
     /** We test a migration */

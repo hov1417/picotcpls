@@ -505,6 +505,7 @@ int tcpls_connect(ptls_t *tls, struct sockaddr *src, struct sockaddr *dest,
 
 int tcpls_handshake(ptls_t *tls, ptls_handshake_properties_t *properties) {
   tcpls_t *tcpls = tls->tcpls;
+  ssize_t rret = 1;
   if (!tcpls)
     return -1;
   int socket = 0;
@@ -522,7 +523,6 @@ int tcpls_handshake(ptls_t *tls, ptls_handshake_properties_t *properties) {
     socket = con->socket;
     tcpls->initial_socket = socket;
   }
-  ssize_t rret;
   int ret;
   ptls_buffer_t sendbuf;
   /** Sends the client hello (or the mpjoin client hello */
@@ -1115,7 +1115,7 @@ ssize_t tcpls_receive(ptls_t *tls, void *buf, size_t nbytes, struct timeval *tv)
     socket = list_get(socklist, i);
     if (FD_ISSET(*socket, &rset)) {
       ret = recv(*socket, input, nbytes, 0);
-      if (ret == -1) {
+      if (ret <= 0) {
         if (errno == ECONNRESET) {
           /** TODO next packets may need discarded? Or send an ack and wait! */
           /*ret = tcpls_receive(tls, buf, nbytes, tv);*/
@@ -1124,29 +1124,17 @@ ssize_t tcpls_receive(ptls_t *tls, void *buf, size_t nbytes, struct timeval *tv)
         assert(con);
         stream_cleanup(con);
         con->state = CLOSED;
-        if (tls->ctx->connection_event_cb)
+        if (tls->ctx->connection_event_cb) {
           tls->ctx->connection_event_cb(CONN_CLOSED, *socket,
               con->this_transportid, tls->ctx->cb_data);
+        }
         close(*socket);
         list_free(socklist);
         return ret;
       }
-      else if (ret == 0) {
-        // mark the connection as closed?
-        /** TODO close all streams ?*/
-        con = get_con_info_from_socket(tcpls, *socket);
-        assert(con);
-        stream_cleanup(con);
-        con->state = CLOSED;
-        if (tls->ctx->connection_event_cb)
-          tls->ctx->connection_event_cb(CONN_CLOSED, *socket, con->this_transportid, tls->ctx->cb_data);
-        close(*socket);
-        list_free(socklist);
-        return ret;
-      }
-      tcpls->socket_rcv = *socket;
-      /* We have stuff to decrypts */
-      if (ret > 0) {
+      else {
+        /* We have stuff to decrypts */
+        tcpls->socket_rcv = *socket;
         int count_streams = count_streams_from_socket(tcpls, tcpls->socket_rcv);
         /** The first message over the fist connection, server-side, we do not
          * have streams attach yet, it is coming! */
@@ -1682,7 +1670,7 @@ int handle_tcpls_extension_option(ptls_t *ptls, tcpls_enum_t type,
         int found = 0;
         for (int i = 0; i < ptls->tcpls->connect_infos->size && !found; i++) {
           con = list_get(ptls->tcpls->connect_infos, i);
-          if (con->socket == ptls->tcpls->socket_rcv) {
+          if (con->this_transportid == transportid) {
             found = 1;
           }
         }

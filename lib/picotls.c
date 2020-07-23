@@ -2218,6 +2218,10 @@ static int client_handle_encrypted_extensions(ptls_t *tls, ptls_iovec_t message,
                 exttype = CONNID;
               else if (type == PTLS_EXTENSION_TYPE_ENCRYPTED_COOKIE)
                 exttype = COOKIE;
+              else {
+                ret = PTLS_ALERT_ILLEGAL_PARAMETER;
+                goto Exit;
+              }
               ptls_decode_block(src, end, 2, {
                   ptls_decode_open_block(src, end, 1, {
                       if (src == end) {
