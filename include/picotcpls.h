@@ -78,6 +78,18 @@ typedef struct st_tcpls_v6_addr_t {
 typedef struct st_connect_info_t {
   tcpls_tcp_state_t state; /* Connection state */
   int socket;
+  /** Fragmentation buffer for TCPLS control records received over this socket
+   * */
+  ptls_buffer_t *buffrag;
+  
+  /* Per connection sending buffer */
+  ptls_buffer_t *sendbuf;
+  
+  int send_start;
+  /** end positio of the stream control event message in the current sending
+   * buffer*/
+  int send_stream_attach_in_sendbuf_pos;
+
   uint32_t this_transportid;
   uint32_t peer_transportid;
   unsigned is_primary : 1;
@@ -98,8 +110,9 @@ typedef struct st_tcpls_stream {
    **/
   tcpls_record_fifo_t *send_queue;
   streamid_t streamid;
+  /* Per stream fragmentation buffer -- temporaly removed */
+  //ptls_buffer_t *streambuffrag;
 
-  ptls_buffer_t *streambuf;
   /** when this stream should first send an attach event before
    * sending any packet */
   unsigned need_sending_attach_event  : 1;
@@ -113,9 +126,6 @@ typedef struct st_tcpls_stream {
    * the stream should be cleaned up the next time tcpls_send is called
    */
   unsigned marked_for_close : 1;
-  /** end positio of the stream control event message in the current sending
-   * buffer*/
-  int send_stream_attach_in_sendbuf_pos;
 
   /**
    * Whether we still have to initialize the aead context for this stream.

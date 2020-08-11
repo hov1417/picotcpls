@@ -4029,14 +4029,14 @@ static int parse_record_header(struct st_ptls_record_t *rec, const uint8_t *src)
     return 0;
 }
 
-static int parse_record(ptls_t *tls, ptls_buffer_t *streambuf, struct st_ptls_record_t *rec, const uint8_t
+static int parse_record(ptls_t *tls, ptls_buffer_t *conbuf, struct st_ptls_record_t *rec, const uint8_t
     *src, size_t *len)
 {
     int ret;
     int offset = 5;
     ptls_buffer_t *buffrag;
-    if (streambuf)
-      buffrag = streambuf;
+    if (conbuf)
+      buffrag = conbuf;
     else
       buffrag = &tls->recvbuf.rec;
     if (buffrag->base == NULL && *len >= offset) {
@@ -4515,7 +4515,7 @@ static int handle_handshake_record(ptls_t *tls,
 }
 
 static int handle_input(ptls_t *tls, ptls_message_emitter_t *emitter,
-    ptls_buffer_t *decryptbuf, ptls_buffer_t *streambuf, const void *input, size_t *inlen,
+    ptls_buffer_t *decryptbuf, ptls_buffer_t *buffrag, const void *input, size_t *inlen,
     ptls_handshake_properties_t *properties)
 {
     struct st_ptls_record_t rec;
@@ -4523,7 +4523,7 @@ static int handle_input(ptls_t *tls, ptls_message_emitter_t *emitter,
     int offset = 5;
 
     /* extract the record */
-    if ((ret = parse_record(tls, streambuf, &rec, input, inlen)) != 0)
+    if ((ret = parse_record(tls, buffrag, &rec, input, inlen)) != 0)
         return ret;
     assert(rec.fragment != NULL);
 
@@ -4595,7 +4595,6 @@ static int handle_input(ptls_t *tls, ptls_message_emitter_t *emitter,
               if (!ret && tls->ctx->output_decrypted_tcpls_data) {
                 decryptbuf->off += rec.length;
               }
-              return ret;
             }
             break;
         case PTLS_CONTENT_TYPE_ALERT:
@@ -4607,8 +4606,8 @@ static int handle_input(ptls_t *tls, ptls_message_emitter_t *emitter,
         }
     }
 NextRecord:
-    if (streambuf)
-      ptls_buffer_dispose(streambuf);
+    if (buffrag)
+      ptls_buffer_dispose(buffrag);
     else
       ptls_buffer_dispose(&tls->recvbuf.rec);
     return ret;
@@ -4705,7 +4704,7 @@ int ptls_handshake(ptls_t *tls, ptls_buffer_t *_sendbuf, const void *input,
 }
 
 int ptls_receive(ptls_t *tls, ptls_buffer_t *decryptbuf, ptls_buffer_t
-    *streambuf, const void *_input, size_t *inlen)
+    *buffrag, const void *_input, size_t *inlen)
 {
     const uint8_t *input = (const uint8_t *)_input, *const end = input + *inlen;
     size_t decryptbuf_orig_size = decryptbuf->off;
@@ -4716,7 +4715,7 @@ int ptls_receive(ptls_t *tls, ptls_buffer_t *decryptbuf, ptls_buffer_t
     /* loop until we decrypt some application data (or an error) */
     while (ret == 0 && input != end && decryptbuf_orig_size == decryptbuf->off) {
         size_t consumed = end - input;
-        ret = handle_input(tls, NULL, decryptbuf, streambuf, input, &consumed, NULL);
+        ret = handle_input(tls, NULL, decryptbuf, buffrag, input, &consumed, NULL);
         input += consumed;
 
         switch (ret) {

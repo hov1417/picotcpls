@@ -73,7 +73,7 @@ static tcpls_stream_t *stream_new(ptls_t *tcpls, streamid_t streamid,
     connect_info_t *con, int is_ours);
 static void stream_free(tcpls_stream_t *stream);
 static int cmp_times(struct timeval *t1, struct timeval *t2);
-static int stream_send_control_message(tcpls_t *tcpls, ptls_aead_context_t *enc,
+static int stream_send_control_message(ptls_buffer_t *sendbuf, ptls_aead_context_t *enc,
     const void *inputinfo, tcpls_enum_t message, uint32_t message_len);
 static connect_info_t *get_con_info_from_socket(tcpls_t *tcpls, int socket);
 static connect_info_t *get_best_con(tcpls_t *tcpls);
@@ -541,8 +541,8 @@ int tcpls_handshake(ptls_t *tls, ptls_handshake_properties_t *properties) {
       /* we should get the TRANSPORTID_NEW -- NOTE; this is the size should not
        * exceed it */
       uint8_t recvbuf[128];
-      connect_info_t *con = get_primary_con_info(tcpls);
-      while ((rret = read(con->socket, recvbuf, sizeof(recvbuf))) == -1 && errno == EINTR)
+      /*connect_info_t *con = get_primary_con_info(tcpls);*/
+      while ((rret = read(socket, recvbuf, sizeof(recvbuf))) == -1 && errno == EINTR)
         ;
       if (rret == 0)
         goto Exit;
@@ -554,18 +554,16 @@ int tcpls_handshake(ptls_t *tls, ptls_handshake_properties_t *properties) {
       size_t consumed;;
       input_off = 0;
       size_t input_size = rret;
+      connect_info_t *con = get_con_info_from_socket(tcpls, socket);
       do {
         consumed = input_size - input_off;
-        rret = ptls_receive(tls, &decryptbuf, NULL, recvbuf + input_off, &consumed);
+        rret = ptls_receive(tls, &decryptbuf, con->buffrag, recvbuf + input_off, &consumed);
         input_off += consumed;
       } while (rret == 0 && input_off < input_size);
 
-      if (rret != 0) {
-        return rret;
-      }
       ptls_buffer_dispose(&sendbuf);
       ptls_buffer_dispose(&decryptbuf);
-      return PTLS_ERROR_HANDSHAKE_IS_MPJOIN;
+      return rret;
     }
   }
   sendbuf.off = 0;
@@ -642,6 +640,15 @@ int tcpls_accept(tcpls_t *tcpls, int socket, uint8_t *cookie, uint32_t transport
   memset(&newconn, 0, sizeof(connect_info_t));
   newconn.state = CONNECTED;
   newconn.socket = socket;
+  newconn.buffrag = malloc(sizeof(ptls_buffer_t));
+  memset(newconn.buffrag, 0, sizeof(ptls_buffer_t));
+  /*ptls_buffer_init(newconn.buffrag, "", 0);*/
+  /*if (ptls_buffer_reserve(newconn.buffrag, 5) != 0) {*/
+    /*free(newconn.buffrag);*/
+    /*return -1;*/
+  /*}*/
+  newconn.sendbuf = malloc(sizeof(ptls_buffer_t));
+  ptls_buffer_init(newconn.sendbuf, "", 0);
   newconn.this_transportid = tcpls->next_transport_id++;
   newconn.peer_transportid = transportid;
   tcpls->nbr_tcp_streams++;
@@ -679,10 +686,10 @@ int tcpls_accept(tcpls_t *tcpls, int socket, uint8_t *cookie, uint32_t transport
     uint8_t input[4+4];
     memcpy(input, &newconn.this_transportid, 4);
     memcpy(&input[4], &transportid, 4);
-    stream_send_control_message(tcpls, tcpls->tls->traffic_protection.enc.aead, input, TRANSPORT_NEW, 8);
-    connect_info_t *con = get_primary_con_info(tcpls);
+    stream_send_control_message(tcpls->sendbuf, tcpls->tls->traffic_protection.enc.aead, input, TRANSPORT_NEW, 8);
+    /*connect_info_t *con = get_primary_con_info(tcpls);*/
     int ret;
-    ret = send(con->socket, tcpls->sendbuf->base+tcpls->send_start,
+    ret = send(socket, tcpls->sendbuf->base+tcpls->send_start,
         tcpls->sendbuf->off-tcpls->send_start, 0);
     if (ret < 0) {
       /** TODO?  */
@@ -761,6 +768,17 @@ streamid_t tcpls_stream_new(ptls_t *tls, struct sockaddr *src, struct sockaddr *
   if (ret) {
     coninfo.socket = 0;
     coninfo.state = CLOSED;
+    coninfo.this_transportid = tcpls->next_transport_id++;
+    coninfo.buffrag = malloc(sizeof(ptls_buffer_t));
+    memset(coninfo.buffrag, 0, sizeof(ptls_buffer_t));
+    /*ptls_buffer_init(coninfo.buffrag, "", 0);*/
+    /*if (ptls_buffer_reserve(coninfo.buffrag, 5) != 0) {*/
+      /*free(coninfo.buffrag);*/
+      /*return -1;*/
+    /*}*/
+    coninfo.sendbuf = malloc(sizeof(ptls_buffer_t));
+    ptls_buffer_init(coninfo.sendbuf, "", 0);
+
     if (dest->sa_family == AF_INET) {
       /** NULL src means we use the default one */
       coninfo.src = src_addr;
@@ -845,13 +863,13 @@ int tcpls_streams_attach(ptls_t *tls, streamid_t streamid, int sendnow) {
       /** send the stream id to the peer */
       memcpy(input, &stream->streamid, 4);
       memcpy(&input[4], &stream->con->peer_transportid, 4);
-      stream_send_control_message(tcpls, ctx_to_use, input, STREAM_ATTACH, 8);
-      stream->send_stream_attach_in_sendbuf_pos = tcpls->sendbuf->off;
+      stream_send_control_message(stream->con->sendbuf, ctx_to_use, input, STREAM_ATTACH, 8);
+      stream->con->send_stream_attach_in_sendbuf_pos = stream->con->sendbuf->off;
       stream->need_sending_attach_event = 0;
       tcpls->check_stream_attach_sent = 1;
       if (sendnow) {
-        ret = send(stream->con->socket, tcpls->sendbuf->base+tcpls->send_start,
-            tcpls->sendbuf->off-tcpls->send_start, 0);
+        ret = send(stream->con->socket, stream->con->sendbuf->base+stream->con->send_start,
+            stream->con->sendbuf->off-stream->con->send_start, 0);
         if (ret < 0) {
           /** Failover? */
           return -1;
@@ -859,13 +877,13 @@ int tcpls_streams_attach(ptls_t *tls, streamid_t streamid, int sendnow) {
         /** Mark streams usables */
         check_stream_attach_have_been_sent(tcpls, ret);
         /** did we sent everything? =) */
-        if (tcpls->sendbuf->off == tcpls->send_start + ret) {
-          tcpls->sendbuf->off = 0;
-          tcpls->send_start = 0;
+        if (stream->con->sendbuf->off == stream->con->send_start + ret) {
+          stream->con->sendbuf->off = 0;
+          stream->con->send_start = 0;
           tcpls->check_stream_attach_sent = 0;
         }
-        else if (ret+tcpls->send_start < tcpls->sendbuf->off) {
-          tcpls->send_start += ret;
+        else if (ret+stream->con->send_start < stream->con->sendbuf->off) {
+          stream->con->send_start += ret;
         }
       }
     }
@@ -879,23 +897,23 @@ static int stream_close_helper(tcpls_t *tcpls, tcpls_stream_t *stream, int type,
   /** send the stream id to the peer */
   memcpy(input, &stream->streamid, 4);
   /** queue the message in the sending buffer */
-  stream_send_control_message(tcpls, stream->aead_enc, input, type, 4);
+  stream_send_control_message(stream->con->sendbuf, stream->aead_enc, input, type, 4);
   if (sendnow) {
     int ret;
     /*connect_info_t *con = get_primary_con_info(tcpls);*/
-    ret = send(stream->con->socket, tcpls->sendbuf->base+tcpls->send_start,
-        tcpls->sendbuf->off-tcpls->send_start, 0);
+    ret = send(stream->con->socket, stream->con->sendbuf->base+stream->con->send_start,
+        stream->con->sendbuf->off-stream->con->send_start, 0);
     if (ret < 0) {
       /** Failover ?  */
       return -1;
     }
     /* check whether we sent everything */
-    if (tcpls->sendbuf->off == tcpls->send_start + ret) {
-      tcpls->sendbuf->off = 0;
-      tcpls->send_start = 0;
+    if (stream->con->sendbuf->off == stream->con->send_start + ret) {
+      stream->con->sendbuf->off = 0;
+      stream->con->send_start = 0;
     }
-    else if (ret+tcpls->send_start < tcpls->sendbuf->off) {
-      tcpls->send_start += ret;
+    else if (ret+stream->con->send_start < stream->con->sendbuf->off) {
+      stream->con->send_start += ret;
     }
   }
   else {
@@ -961,9 +979,9 @@ ssize_t tcpls_send(ptls_t *tls, streamid_t streamid, const void *input, size_t n
     memcpy(input, &stream->streamid, 4);
     memcpy(&input[4], &peer_transportid, 4);
     /** Add a stream message creation to the sending buffer ! */
-    stream_send_control_message(tcpls, tls->traffic_protection.enc.aead, input, STREAM_ATTACH, 8);
+    stream_send_control_message(stream->con->sendbuf, tls->traffic_protection.enc.aead, input, STREAM_ATTACH, 8);
     /** To check whether we sent it and if the stream becomes usable */
-    stream->send_stream_attach_in_sendbuf_pos = tcpls->sendbuf->off;
+    stream->con->send_stream_attach_in_sendbuf_pos = stream->con->sendbuf->off;
     tcpls->check_stream_attach_sent = 1;
     list_add(tcpls->streams, stream);
   }
@@ -991,7 +1009,7 @@ ssize_t tcpls_send(ptls_t *tls, streamid_t streamid, const void *input, size_t n
   // get the right  aead context matching the stream id
   // This is done for compabitility with original PTLS's unit tests
   tcpls->tls->traffic_protection.enc.aead = stream->aead_enc;
-  ret = ptls_send(tcpls->tls, tcpls->sendbuf, input, nbytes);
+  ret = ptls_send(tcpls->tls, stream->con->sendbuf, input, nbytes);
   tcpls->tls->traffic_protection.enc.aead = remember_aead;
   switch (ret) {
     /** Error in encryption -- TODO document the possibilties */
@@ -1000,8 +1018,8 @@ ssize_t tcpls_send(ptls_t *tls, streamid_t streamid, const void *input, size_t n
     default: return ret;
   }
   /** Send over the socket's stream */
-  ret = send(stream->con->socket, tcpls->sendbuf->base+tcpls->send_start,
-      tcpls->sendbuf->off-tcpls->send_start, 0);
+  ret = send(stream->con->socket, stream->con->sendbuf->base+stream->con->send_start,
+      stream->con->sendbuf->off-stream->con->send_start, 0);
   if (ret < 0) {
     /** The peer reset the connection */
     stream->con->state = CLOSED;
@@ -1054,27 +1072,15 @@ ssize_t tcpls_send(ptls_t *tls, streamid_t streamid, const void *input, size_t n
     check_stream_attach_have_been_sent(tcpls, ret);
   }
   /** did we sent everything? =) */
-  if (tcpls->sendbuf->off == tcpls->send_start + ret) {
-    tcpls->sendbuf->off = 0;
-    tcpls->send_start = 0;
+  if (stream->con->sendbuf->off == stream->con->send_start + ret) {
+    stream->con->sendbuf->off = 0;
+    stream->con->send_start = 0;
     tcpls->check_stream_attach_sent = 0;
-    /** Do we have stream cleanup to do ? */
-    /*if (tcpls->streams_marked_for_close) {*/
-      /*for (int i = 0; i < tcpls->streams->size; i++) {*/
-        /*stream = list_get(tcpls->streams, i);*/
-        /*if (stream->marked_for_close) {*/
-          /*close(stream->con->socket);*/
-          /*list_remove(tcpls->streams, stream);*/
-          /*stream_free(stream);*/
-        /*}*/
-      /*}*/
-      /*tcpls->streams_marked_for_close = 0;*/
-    /*}*/
   }
-  else if (ret+tcpls->send_start < tcpls->sendbuf->off) {
-    tcpls->send_start += ret;
+  else if (ret+stream->con->send_start < stream->con->sendbuf->off) {
+    stream->con->send_start += ret;
   }
-  return 0;
+  return ret;
 }
 
 /**
@@ -1143,11 +1149,12 @@ ssize_t tcpls_receive(ptls_t *tls, void *buf, size_t nbytes, struct timeval *tv)
         size_t input_size = ret;
         size_t consumed;
         if (count_streams == 0) {
+          connect_info_t *con = get_con_info_from_socket(tls->tcpls, *socket);
           while (input_off < input_size) {
             ptls_aead_context_t *remember_aead = tcpls->tls->traffic_protection.dec.aead;
             do {
               consumed = input_size - input_off;
-              rret = ptls_receive(tls, &decryptbuf, NULL, input + input_off, &consumed);
+              rret = ptls_receive(tls, &decryptbuf, con->buffrag, input + input_off, &consumed);
               if (rret == 0)
                 input_off += consumed;
             } while (rret == 0 && input_off < input_size);
@@ -1164,10 +1171,10 @@ ssize_t tcpls_receive(ptls_t *tls, void *buf, size_t nbytes, struct timeval *tv)
               // get the right  aead context matching the stream id
               // This is done for compabitility with original PTLS's unit tests
               /** We possible have not stream attached server-side */
-              if (stream)
+              if (stream) {
                 tcpls->tls->traffic_protection.dec.aead = stream->aead_dec;
-              if (tcpls->socket_rcv != tcpls->initial_socket)
-                buf_to_use = stream->streambuf;
+                buf_to_use = stream->con->buffrag;
+              }
               input_off = 0;
               input_size = ret;
               do {
@@ -1181,7 +1188,7 @@ ssize_t tcpls_receive(ptls_t *tls, void *buf, size_t nbytes, struct timeval *tv)
           }
         }
         if (rret != 0) {
-          /*ptls_buffer_dispose(&decryptbuf);*/
+          ptls_buffer_dispose(&decryptbuf);
           list_free(socklist);
           fprintf(stderr, "tcpls_receive got a %d error message code\n", rret);
           return ret;
@@ -1324,10 +1331,10 @@ static void check_stream_attach_have_been_sent(tcpls_t *tcpls, int consumed) {
   tcpls_stream_t *stream;
   for (int i = 0; i < tcpls->streams->size; i++) {
     stream = list_get(tcpls->streams, i);
-    if (!stream->stream_usable && stream->send_stream_attach_in_sendbuf_pos <=
-        consumed + tcpls->send_start) {
+    if (!stream->stream_usable && stream->con->send_stream_attach_in_sendbuf_pos <=
+        consumed + stream->con->send_start) {
       stream->stream_usable = 1;
-      stream->send_stream_attach_in_sendbuf_pos = 0; // reset it
+      stream->con->send_stream_attach_in_sendbuf_pos = 0; // reset it
       /** fire callback ! TODO */
     }
   }
@@ -1362,6 +1369,16 @@ static int handle_connect(tcpls_t *tcpls, tcpls_v4_addr_t *src, tcpls_v4_addr_t
     coninfo->socket = 0;
     coninfo->state = CLOSED;
     coninfo->this_transportid = tcpls->next_transport_id++;
+    coninfo->buffrag = malloc(sizeof(ptls_buffer_t));
+    memset(coninfo->buffrag, 0, sizeof(ptls_buffer_t));
+    /*ptls_buffer_init(coninfo->buffrag, "", 0);*/
+    /*if (ptls_buffer_reserve(coninfo->buffrag, 5) != 0) {*/
+      /*free(coninfo->buffrag);*/
+      /*return -1;*/
+    /*}*/
+    coninfo->sendbuf = malloc(sizeof(ptls_buffer_t));
+    ptls_buffer_init(coninfo->sendbuf, "", 0);
+
     if (afinet == AF_INET) {
       coninfo->src = src;
       coninfo->dest = dest;
@@ -1454,12 +1471,12 @@ static int stream_cleanup(connect_info_t *con) {
  * Note, currently we implement 1 stream per TCP connection
  */
 
-static int stream_send_control_message(tcpls_t *tcpls, ptls_aead_context_t *aead,
+static int stream_send_control_message(ptls_buffer_t *sendbuf, ptls_aead_context_t *aead,
     const void *inputinfo, tcpls_enum_t tcpls_message, uint32_t message_len) {
   uint8_t input[message_len+sizeof(tcpls_message)];
   memcpy(input, &tcpls_message, sizeof(tcpls_message));
   memcpy(input+sizeof(tcpls_message), inputinfo, message_len);
-  return buffer_push_encrypted_records(tcpls->sendbuf,
+  return buffer_push_encrypted_records(sendbuf,
       PTLS_CONTENT_TYPE_TCPLS_OPTION, input,
       message_len+sizeof(tcpls_message), aead);
 }
@@ -1906,16 +1923,17 @@ static tcpls_stream_t *stream_new(ptls_t *tls, streamid_t streamid,
   tcpls_stream_t *stream = malloc(sizeof(*stream));
   memset(stream, 0, sizeof(tcpls_stream_t));
   stream->streamid = streamid;
+  /* Temporaly removed */
+  /*stream->streambuffrag = malloc(sizeof(*stream->streambuffrag));*/
+  /*ptls_buffer_init(stream>streambuffrag, "", 0);*/
+  /*if (ptls_buffer_reserve(stream->streambuffrag, 5) != 0)*/
+    /*return NULL;*/
 
   /** TODO figure out a good default size for the control flow */
   /*stream->send_queue = tcpls_record_queue_new(500);*/
 
   stream->con = con;
   stream->stream_usable = 0;
-  stream->streambuf = malloc(sizeof(*stream->streambuf));
-  ptls_buffer_init(stream->streambuf, "", 0);
-  if (ptls_buffer_reserve(stream->streambuf, 5) != 0)
-    return NULL;
   if (ptls_handshake_is_complete(tls)) {
   /** Now derive a correct aead context for this stream */
     new_stream_derive_aead_context(tls, stream, is_ours);
@@ -1962,7 +1980,9 @@ static void stream_free(tcpls_stream_t *stream) {
     return;
   ptls_aead_free(stream->aead_enc);
   ptls_aead_free(stream->aead_dec);
-  ptls_buffer_dispose(stream->streambuf);
+  /** Temporaly removed */
+  /*ptls_buffer_dispose(stream->streambuffrag);*/
+  /*free(stream->streambuffrag);*/
 }
 
 /**
@@ -2115,6 +2135,18 @@ void tcpls_free(tcpls_t *tcpls) {
   free(tcpls->sendbuf);
   free(tcpls->recvbuf);
   list_free(tcpls->streams);
+  connect_info_t *con;
+  for (int i = 0; i < tcpls->connect_infos->size; i++) {
+    con = list_get(tcpls->connect_infos, i);
+    if (con->buffrag) {
+      ptls_buffer_dispose(con->buffrag);
+      free(con->buffrag);
+    }
+    if (con->sendbuf) {
+      ptls_buffer_dispose(con->sendbuf);
+      free(con->sendbuf);
+    }
+  }
   list_free(tcpls->connect_infos);
   list_free(tcpls->cookies);
   ptls_tcpls_options_free(tcpls);

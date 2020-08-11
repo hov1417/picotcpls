@@ -256,7 +256,7 @@ static int handle_tcpls_read(tcpls_t *tcpls, int socket) {
 }
 
 static int handle_tcpls_write(tcpls_t *tcpls, struct conn_to_tcpls *conntotcpls,  int inputfd) {
-  static const size_t block_size = 1024;
+  static const size_t block_size = 16384;
   uint8_t buf[block_size];
   int ret, ioret;
   while ((ioret = read(inputfd, buf, block_size)) == -1 && errno == EINTR)
@@ -266,6 +266,7 @@ static int handle_tcpls_write(tcpls_t *tcpls, struct conn_to_tcpls *conntotcpls,
       fprintf(stderr, "tcpls_send returned %d", ret);
       return -1;
     }
+    /*fprintf(stderr, "sending %d bytes on stream %u \n", ret, conntotcpls->streamid);*/
   } else if (ioret == 0) {
     /* closed */
     conntotcpls->wants_to_write = 0;
@@ -654,7 +655,7 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
           if (maxfd < conn->conn_fd)
             maxfd = conn->conn_fd;
         }
-        fprintf(stderr, "waiting for connection or r/w event...\n");
+        /*fprintf(stderr, "waiting for connection or r/w event...\n");*/
       } while (select(maxfd+1, &readset, &writeset, NULL, &timeout) == -1);
       /** Check first we have a listen() connection */
       for (int i = 0; i < nbr_ours; i++) {
@@ -676,7 +677,7 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
             conntcpls.wants_to_write = 0;
             conntcpls.tcpls = new_tcpls;
             list_add(tcpls_l, new_tcpls);
-            /** ADD our ips */
+            /** ADD our ips  -- This might worth to be ctx and instance-based?*/
             tcpls_add_ips(new_tcpls, sa_ours, NULL, nbr_ours, 0);
             if (conn_tcpls->size == 0)
               conntcpls.is_primary = 1;
@@ -693,7 +694,7 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
           handle_tcpls_read(conn->tcpls, conn->conn_fd);
           if (ptls_handshake_is_complete(conn->tcpls->tls) && conn->is_primary)
             conn->wants_to_write = 1;
-          break;
+          /*break;*/
         }
       }
       /** Write data for all tcpls_t * that wants to write :-) */
