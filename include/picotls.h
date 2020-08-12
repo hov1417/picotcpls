@@ -833,7 +833,7 @@ typedef struct st_ptls_log_event_t {
     /**
      * A callback used when a stream event occurs
      */
-    int (*stream_event_cb)(tcpls_event_t event, streamid_t streamid, int transportid, void *cb_data);
+    int (*stream_event_cb)(tcpls_t *tcpls, tcpls_event_t event, streamid_t streamid, int transportid, void *cb_data);
     /**
      * A callback used when a connection event occurs
      */

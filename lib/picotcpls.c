@@ -678,6 +678,10 @@ int tcpls_accept(tcpls_t *tcpls, int socket, uint8_t *cookie, uint32_t transport
       return -1;
     newconn.src6 = v6;
   }
+  if (tcpls->tls->ctx->connection_event_cb) {
+    tcpls->tls->ctx->connection_event_cb(CONN_OPENED, newconn.socket,
+        newconn.this_transportid, tcpls->tls->ctx->cb_data);
+  }
   /**
    * Send back a control message announcing the transport connection id of
    * this newconnn, and echo back the transport id.
@@ -968,7 +972,7 @@ ssize_t tcpls_send(ptls_t *tls, streamid_t streamid, const void *input, size_t n
     tcpls->socket_rcv = con->socket;
     stream = stream_new(tls, tcpls->next_stream_id++, con, 1);
     if (tls->ctx->stream_event_cb) {
-      tls->ctx->stream_event_cb(STREAM_OPENED, stream->streamid, con->this_transportid,
+      tls->ctx->stream_event_cb(tcpls, STREAM_OPENED, stream->streamid, con->this_transportid,
           tls->ctx->cb_data);
     }
     stream->need_sending_attach_event = 0;
@@ -1091,13 +1095,14 @@ ssize_t tcpls_send(ptls_t *tls, streamid_t streamid, const void *input, size_t n
 
 ssize_t tcpls_receive(ptls_t *tls, void *buf, size_t nbytes, struct timeval *tv) {
   fd_set rset;
-  int ret;
+  int ret, selectret;
   tcpls_t *tcpls = tls->tcpls;
   list_t *socklist = new_list(sizeof(int), tcpls->nbr_tcp_streams);
   FD_ZERO(&rset);
   connect_info_t *con;
   int received_data = 0;
   int maxfd = 0;
+  int initialnbytes = nbytes;
   for (int i = 0; i < tcpls->connect_infos->size; i++) {
     con = list_get(tcpls->connect_infos, i);
     if (con->state != CLOSED) {
@@ -1107,20 +1112,26 @@ ssize_t tcpls_receive(ptls_t *tls, void *buf, size_t nbytes, struct timeval *tv)
         maxfd = con->socket;
     }
   }
-  ret = select(maxfd+1, &rset, NULL, NULL, tv);
-  if (ret == -1) {
+  selectret = select(maxfd+1, &rset, NULL, NULL, tv);
+  if (selectret == -1) {
     list_free(socklist);
     return -1;
   }
   int *socket;
   ret = 0;
   uint8_t input[nbytes];
+  int recvlen, remainder;
+  remainder = nbytes % selectret;
+  recvlen = nbytes/selectret;
   ptls_buffer_t decryptbuf;
   ptls_buffer_init(&decryptbuf, "", 0);
   for (int i =  0; i < socklist->size && nbytes > 0; i++) {
     socket = list_get(socklist, i);
     if (FD_ISSET(*socket, &rset)) {
-      ret = recv(*socket, input, nbytes, 0);
+      if (initialnbytes == nbytes)
+        ret = recv(*socket, input, recvlen+remainder, 0);
+      else
+        ret = recv(*socket, input, recvlen, 0);
       if (ret <= 0) {
         if (errno == ECONNRESET) {
           /** TODO next packets may need discarded? Or send an ack and wait! */
@@ -1666,7 +1677,7 @@ int handle_tcpls_extension_option(ptls_t *ptls, tcpls_enum_t type,
          stream_close_helper(ptls->tcpls, stream, STREAM_CLOSE_ACK, 1);
        }
        if (ptls->ctx->stream_event_cb)
-         ptls->ctx->stream_event_cb(STREAM_CLOSED, stream->streamid,
+         ptls->ctx->stream_event_cb(ptls->tcpls, STREAM_CLOSED, stream->streamid,
              stream->con->this_transportid, ptls->ctx->cb_data);
        /** Free AEAD contexts */
        stream_free(stream);
@@ -1701,7 +1712,7 @@ int handle_tcpls_extension_option(ptls_t *ptls, tcpls_enum_t type,
         ptls->traffic_protection.dec.aead = stream->aead_dec;
         /** trigger callback */
         if (ptls->ctx->stream_event_cb) {
-          ptls->ctx->stream_event_cb(STREAM_OPENED, stream->streamid,
+          ptls->ctx->stream_event_cb(ptls->tcpls, STREAM_OPENED, stream->streamid,
               con->this_transportid, ptls->ctx->cb_data);
         }
         if (!stream) {

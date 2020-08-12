@@ -113,7 +113,7 @@ static int handle_mpjoin(int socket, uint8_t *connid, uint8_t *cookie, uint32_t 
   return -1;
 }
 
-static int handle_client_stream_event(tcpls_event_t event, streamid_t streamid,
+static int handle_client_stream_event(tcpls_t *tcpls, tcpls_event_t event, streamid_t streamid,
     int transportid, void *cbdata) {
   struct cli_data *data = (struct cli_data*) cbdata;
   switch (event) {
@@ -127,31 +127,30 @@ static int handle_client_stream_event(tcpls_event_t event, streamid_t streamid,
   }
   return 0;
 }
-static int handle_stream_event(tcpls_event_t event, streamid_t streamid, int
-    transportid, void *cbdata) {
+static int handle_stream_event(tcpls_t *tcpls, tcpls_event_t event,
+    streamid_t streamid, int transportid, void *cbdata) {
   list_t *conn_tcpls_l = (list_t *) cbdata;
   struct conn_to_tcpls *conn_tcpls;
   switch (event) {
     case STREAM_OPENED:
+      fprintf(stderr, "Handling stream_opened callback\n");
       for (int i = 0; i < conn_tcpls_l->size; i++) {
         conn_tcpls = list_get(conn_tcpls_l, i);
-        if (conn_tcpls->conn_fd == conn_tcpls->tcpls->socket_rcv) {
+        if (conn_tcpls->tcpls == tcpls && conn_tcpls->transportid == transportid) {
+          fprintf(stderr, "Setting streamid %d as wants to write\n", streamid);
           conn_tcpls->streamid = streamid;
           conn_tcpls->is_primary = 1;
           conn_tcpls->wants_to_write = 1;
-          break;
-        }
-        else {
-          conn_tcpls->is_primary = 0;
-          conn_tcpls->wants_to_write = 0;
         }
       }
       break;
     /** currently assumes 2 streams */
     case STREAM_CLOSED:
+      fprintf(stderr, "Handling stream_closed callback\n");
       for (int i = 0; i < conn_tcpls_l->size; i++) {
         conn_tcpls = list_get(conn_tcpls_l, i);
         if (conn_tcpls->transportid == transportid) {
+          fprintf(stderr, "Woh! we're stopping to write on the connection linked to transportid %d\n", transportid);
           conn_tcpls->wants_to_write = 0;
           conn_tcpls->is_primary = 0;
         }
@@ -165,9 +164,11 @@ static int handle_client_connection_event(tcpls_event_t event, int socket, int t
   struct cli_data *data = (struct cli_data*) cbdata;
   switch (event) {
     case CONN_CLOSED:
+      fprintf(stderr, "Received a CONN_CLOSED; removing the socket\n");
       list_remove(data->socklist, &socket);
       break;
     case CONN_OPENED:
+      fprintf(stderr, "Received a CONN_OPENED; adding the socket\n");
       list_add(data->socklist, &socket);
       break;
     default: break;
@@ -180,6 +181,7 @@ static int handle_connection_event(tcpls_event_t event, int socket, int transpor
   switch (event) {
     case CONN_OPENED:
       {
+        fprintf(stderr, "Received a CONN_OPENED; adding the socket\n");
         struct conn_to_tcpls *ctcpls;
         for (int i = 0; i < conntcpls->size; i++) {
           ctcpls = list_get(conntcpls, i);
@@ -192,6 +194,7 @@ static int handle_connection_event(tcpls_event_t event, int socket, int transpor
       break;
     case CONN_CLOSED:
       {
+        fprintf(stderr, "Received a CONN_CLOSED; removing the socket\n");
         struct conn_to_tcpls *ctcpls;
         for (int i = 0; i < conntcpls->size; i++) {
           ctcpls = list_get(conntcpls, i);
@@ -266,7 +269,7 @@ static int handle_tcpls_write(tcpls_t *tcpls, struct conn_to_tcpls *conntotcpls,
       fprintf(stderr, "tcpls_send returned %d", ret);
       return -1;
     }
-    /*fprintf(stderr, "sending %d bytes on stream %u \n", ret, conntotcpls->streamid);*/
+    fprintf(stderr, "sending %d bytes on stream %u \n", ret, conntotcpls->streamid);
   } else if (ioret == 0) {
     /* closed */
     conntotcpls->wants_to_write = 0;
@@ -314,7 +317,7 @@ static int handle_client_connection(tcpls_t *tcpls, struct cli_data *data) {
       socket = list_get(data->socklist, i);
       if (FD_ISSET(*socket, &readfds)) {
         if ((ret = handle_tcpls_read(tcpls, *socket)) < 0) {
-          fprintf(stderr, "handle_tcpls_read returned %d",ret);
+          fprintf(stderr, "handle_tcpls_read returned %d\n",ret);
         }
         received_data += ret;
         if (received_data / 1000000 > mB_received) {
@@ -348,7 +351,7 @@ static int handle_client_connection(tcpls_t *tcpls, struct cli_data *data) {
       /** Close the stream on the initial connection */
       streamid_t *streamid2 = list_get(data->streamlist, 0);
       assert(streamid2);
-      /*tcpls_stream_close(tcpls->tls, *streamid2, 1);*/
+      tcpls_stream_close(tcpls->tls, *streamid2, 1);
     }
   }
   return 0;
