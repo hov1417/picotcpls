@@ -332,10 +332,10 @@ static int handle_client_connection(tcpls_t *tcpls, struct cli_data *data) {
       }
     }
     /** We test a migration */
-    if (received_data >= 5000000t && !has_migrated) {
+    if (received_data >= 5000000 && !has_migrated) {
       has_migrated = 1;
       int socket = 0;
-      connect_info_t *con;
+      connect_info_t *con = NULL;
       for (int i = 0; i < tcpls->connect_infos->size; i++) {
         con = list_get(tcpls->connect_infos, i);
         if (con->dest6) {
@@ -355,6 +355,7 @@ static int handle_client_connection(tcpls_t *tcpls, struct cli_data *data) {
       /** Close the stream on the initial connection */
       streamid_t *streamid2 = list_get(data->streamlist, 0);
       assert(streamid2);
+      assert(streamid);
       tcpls_stream_close(tcpls->tls, *streamid2, 1);
     }
   }

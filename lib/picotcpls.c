@@ -1675,7 +1675,7 @@ int handle_tcpls_extension_option(ptls_t *ptls, tcpls_enum_t type,
       }
       break;
     case FAILOVER:
-      {pm
+      {
         streamid_t streamid = *(streamid_t *)input;
         connect_info_t *con = get_con_info_from_socket(ptls->tcpls, ptls->tcpls->socket_rcv);
         /** move streamid's con to this con */
