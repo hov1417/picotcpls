@@ -23,12 +23,12 @@ class MyTopology(IPTopo):
         s = self.addHost("s")
 
 
-        self.addLink(c, r1, delay="1ms", bw=1)
+        self.addLink(c, r1)
         self.addLink(r1, r2, delay="10ms", bw=1)
         self.addLink(r2, r3, delay="10ms", bw=1)
         self.addLink(r1, r4, delay="20ms", bw=1)
         self.addLink(r4, r3, delay="20ms", bw=1)
-        self.addLink(r3, s, delay="1ms", bw=1)
+        self.addLink(r3, s)
 
 
         super().build(*args, **kwargs)

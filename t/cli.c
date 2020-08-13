@@ -59,22 +59,22 @@ static const char input_file_is_benchmark[] = "is:benchmark";
 
 static void shift_buffer(ptls_buffer_t *buf, size_t delta)
 {
-    if (delta != 0) {
-        assert(delta <= buf->off);
-        if (delta != buf->off)
-            memmove(buf->base, buf->base + delta, buf->off - delta);
-        buf->off -= delta;
-    }
+  if (delta != 0) {
+    assert(delta <= buf->off);
+    if (delta != buf->off)
+      memmove(buf->base, buf->base + delta, buf->off - delta);
+    buf->off -= delta;
+  }
 }
 
 struct tcpls_options {
-	  int timeoutval;
-    unsigned int timeout;
-	  unsigned int is_second;
-    list_t *our_addrs;
-    list_t *our_addrs6;
-    list_t *peer_addrs;
-    list_t *peer_addrs6;
+  int timeoutval;
+  unsigned int timeout;
+  unsigned int is_second;
+  list_t *our_addrs;
+  list_t *our_addrs6;
+  list_t *peer_addrs;
+  list_t *peer_addrs6;
 };
 
 struct conn_to_tcpls {
@@ -146,7 +146,7 @@ static int handle_stream_event(tcpls_t *tcpls, tcpls_event_t event,
         }
       }
       break;
-    /** currently assumes 2 streams */
+      /** currently assumes 2 streams */
     case STREAM_CLOSED:
       fprintf(stderr, "Handling stream_closed callback\n");
       for (int i = 0; i < conn_tcpls_l->size; i++) {
@@ -214,7 +214,7 @@ static int handle_connection_event(tcpls_event_t event, int socket, int transpor
 
 static void make_nonblocking(int fd)
 {
-    fcntl(fd, F_SETFL, O_NONBLOCK);
+  fcntl(fd, F_SETFL, O_NONBLOCK);
 }
 
 /** Temporaly to ease devopment. Later on: merge with handle_connection and make
@@ -332,7 +332,7 @@ static int handle_client_connection(tcpls_t *tcpls, struct cli_data *data) {
       }
     }
     /** We test a migration */
-    if (received_data >= 2242880 && !has_migrated) {
+    if (received_data >= 5000000t && !has_migrated) {
       has_migrated = 1;
       int socket = 0;
       connect_info_t *con;
