@@ -86,7 +86,6 @@ static connect_info_t *get_primary_con_info(tcpls_t *tcpls);
 static int count_streams_from_socket(tcpls_t *tcpls, int socket);
 static tcpls_stream_t *stream_get(tcpls_t *tcpls, streamid_t streamid);
 static tcpls_stream_t *stream_helper_new(tcpls_t *tcpls, connect_info_t *con);
-static int stream_cleanup(connect_info_t *con);
 static void check_stream_attach_have_been_sent(tcpls_t *tcpls, int consumed);
 static int new_stream_derive_aead_context(ptls_t *tls, tcpls_stream_t *stream, int is_ours);
 static int handle_connect(tcpls_t *tcpls, tcpls_v4_addr_t *src, tcpls_v4_addr_t
@@ -964,7 +963,9 @@ ssize_t tcpls_send(ptls_t *tls, streamid_t streamid, const void *input, size_t n
   }
   /** Check whether we already have a stream open; if not, build a stream
    * with the default context */
-  if (!tcpls->streams->size) {
+  if (!tcpls->streams->size && ((tcpls->tls->is_server && tcpls->next_stream_id
+          ==  2147483649) || (!tcpls->tls->is_server && tcpls->next_stream_id ==
+            1))) {
     // Create a stream with the default context, attached to primary IP
     connect_info_t *con = get_primary_con_info(tcpls);
     assert(con);
@@ -1139,7 +1140,6 @@ ssize_t tcpls_receive(ptls_t *tls, void *buf, size_t nbytes, struct timeval *tv)
         }
         con = get_con_info_from_socket(tcpls, *socket);
         assert(con);
-        stream_cleanup(con);
         con->state = CLOSED;
         if (tls->ctx->connection_event_cb) {
           tls->ctx->connection_event_cb(CONN_CLOSED, *socket,
@@ -1469,9 +1469,6 @@ static tcpls_stream_t *stream_helper_new(tcpls_t *tcpls, connect_info_t *con) {
   return stream;
 }
 
-static int stream_cleanup(connect_info_t *con) {
-  return 0;
-}
 
 /**
  * Send a message to the peer to 
@@ -1669,22 +1666,25 @@ int handle_tcpls_extension_option(ptls_t *ptls, tcpls_enum_t type,
          /** What to do? this should not happen - Close the connection*/
          return PTLS_ERROR_STREAM_NOT_FOUND;
        }
-       stream->con->state = CLOSED;
+       /** TODO close the state if this is the only stream attached to this con*/
+       /*stream->con->state = CLOSED;*/
        /** Note, we current assume only one stream per address */
-       if (type == STREAM_CLOSE_ACK)
+       if (type == STREAM_CLOSE_ACK) {
          close(stream->con->socket);
+         stream->con->state = CLOSED;
+       }
        else if (type == STREAM_CLOSE) {
          stream_close_helper(ptls->tcpls, stream, STREAM_CLOSE_ACK, 1);
        }
        if (ptls->ctx->stream_event_cb)
          ptls->ctx->stream_event_cb(ptls->tcpls, STREAM_CLOSED, stream->streamid,
              stream->con->this_transportid, ptls->ctx->cb_data);
-       /** Free AEAD contexts */
-       stream_free(stream);
-       list_remove(ptls->tcpls->streams, stream);
        if (ptls->ctx->connection_event_cb && type == STREAM_CLOSE_ACK)
          ptls->ctx->connection_event_cb(CONN_CLOSED, stream->con->socket,
              stream->con->this_transportid, ptls->ctx->cb_data);
+       /** Free AEAD contexts */
+       stream_free(stream);
+       list_remove(ptls->tcpls->streams, stream);
        return 0;
       }
       break;

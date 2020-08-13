@@ -118,9 +118,11 @@ static int handle_client_stream_event(tcpls_t *tcpls, tcpls_event_t event, strea
   struct cli_data *data = (struct cli_data*) cbdata;
   switch (event) {
     case STREAM_OPENED:
+      fprintf(stderr, "Handling stream_opened callback\n");
       list_add(data->streamlist, &streamid);
       break;
     case STREAM_CLOSED:
+      fprintf(stderr, "Handling stream_closed callback\n");
       list_remove(data->streamlist, &streamid);
       break;
     default: break;
@@ -137,7 +139,7 @@ static int handle_stream_event(tcpls_t *tcpls, tcpls_event_t event,
       for (int i = 0; i < conn_tcpls_l->size; i++) {
         conn_tcpls = list_get(conn_tcpls_l, i);
         if (conn_tcpls->tcpls == tcpls && conn_tcpls->transportid == transportid) {
-          fprintf(stderr, "Setting streamid %d as wants to write\n", streamid);
+          fprintf(stderr, "Setting streamid %u as wants to write\n", streamid);
           conn_tcpls->streamid = streamid;
           conn_tcpls->is_primary = 1;
           conn_tcpls->wants_to_write = 1;
@@ -164,11 +166,11 @@ static int handle_client_connection_event(tcpls_event_t event, int socket, int t
   struct cli_data *data = (struct cli_data*) cbdata;
   switch (event) {
     case CONN_CLOSED:
-      fprintf(stderr, "Received a CONN_CLOSED; removing the socket\n");
+      fprintf(stderr, "Received a CONN_CLOSED; removing the socket %d\n", socket);
       list_remove(data->socklist, &socket);
       break;
     case CONN_OPENED:
-      fprintf(stderr, "Received a CONN_OPENED; adding the socket\n");
+      fprintf(stderr, "Received a CONN_OPENED; adding the socket %d\n", socket);
       list_add(data->socklist, &socket);
       break;
     default: break;
@@ -266,12 +268,14 @@ static int handle_tcpls_write(tcpls_t *tcpls, struct conn_to_tcpls *conntotcpls,
     ;
   if (ioret > 0) {
     if((ret = tcpls_send(tcpls->tls, conntotcpls->streamid, buf, ioret)) < 0) {
-      fprintf(stderr, "tcpls_send returned %d", ret);
+      fprintf(stderr, "tcpls_send returned %d\n for sending on streamid %u",
+          ret, conntotcpls->streamid);
       return -1;
     }
     fprintf(stderr, "sending %d bytes on stream %u \n", ret, conntotcpls->streamid);
   } else if (ioret == 0) {
     /* closed */
+    fprintf(stderr, "End-of-file, closing the connection\n");
     conntotcpls->wants_to_write = 0;
     close(inputfd);
     inputfd = -1;
@@ -697,13 +701,13 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
           handle_tcpls_read(conn->tcpls, conn->conn_fd);
           if (ptls_handshake_is_complete(conn->tcpls->tls) && conn->is_primary)
             conn->wants_to_write = 1;
-          /*break;*/
+          break;
         }
       }
       /** Write data for all tcpls_t * that wants to write :-) */
       for (int i = 0; i < conn_tcpls->size; i++) {
         struct conn_to_tcpls *conn = list_get(conn_tcpls, i);
-        if (FD_ISSET(conn->conn_fd, &writeset) && conn->wants_to_write) {
+        if (FD_ISSET(conn->conn_fd, &writeset)) {
           /** Figure out the stream to send data */
           handle_tcpls_write(conn->tcpls, conn, inputfd);
         }
