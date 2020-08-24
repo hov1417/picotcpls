@@ -1075,7 +1075,6 @@ int tcpls_receive(ptls_t *tls, ptls_buffer_t *decryptbuf, size_t nbytes, struct 
   fd_set rset;
   int ret, selectret;
   tcpls_t *tcpls = tls->tcpls;
-  list_t *socklist = new_list(sizeof(int), tcpls->nbr_tcp_streams);
   FD_ZERO(&rset);
   connect_info_t *con;
   int received_data = 0;
@@ -1096,7 +1095,6 @@ int tcpls_receive(ptls_t *tls, ptls_buffer_t *decryptbuf, size_t nbytes, struct 
   for (int i = 0; i < tcpls->connect_infos->size; i++) {
     con = list_get(tcpls->connect_infos, i);
     if (con->state != CLOSED) {
-      list_add(socklist, &con->socket);
       FD_SET(con->socket, &rset);
       if (maxfd < con->socket)
         maxfd = con->socket;
@@ -1104,45 +1102,38 @@ int tcpls_receive(ptls_t *tls, ptls_buffer_t *decryptbuf, size_t nbytes, struct 
   }
   selectret = select(maxfd+1, &rset, NULL, NULL, tv);
   if (selectret <= 0) {
-    list_free(socklist);
     return -1;
   }
-  int *socket;
   ret = 0;
   uint8_t input[nbytes];
   int recvlen, remainder;
   remainder = nbytes % selectret;
   recvlen = nbytes/selectret;
-  /*ptls_buffer_t decryptbuf;*/
-  /*ptls_buffer_init(&decryptbuf, "", 0);*/
-  for (int i =  0; i < socklist->size && nbytes > 0; i++) {
-    socket = list_get(socklist, i);
-    if (FD_ISSET(*socket, &rset)) {
+  for (int i =  0; i < tcpls->connect_infos->size && nbytes > 0; i++) {
+    con = list_get(tcpls->connect_infos, i);
+    if (FD_ISSET(con->socket, &rset)) {
       if (initialnbytes == nbytes)
-        ret = recv(*socket, input, recvlen+remainder, 0);
+        ret = recv(con->socket, input, recvlen+remainder, 0);
       else
-        ret = recv(*socket, input, recvlen, 0);
+        ret = recv(con->socket, input, recvlen, 0);
       if (ret <= 0) {
         if (errno == ECONNRESET) {
           /** TODO next packets may need discarded? Or send an ack and wait! */
           /*ret = tcpls_receive(tls, buf, nbytes, tv);*/
         }
-        con = get_con_info_from_socket(tcpls, *socket);
-        assert(con);
         con->state = CLOSED;
         if (tls->ctx->connection_event_cb) {
-          tls->ctx->connection_event_cb(CONN_CLOSED, *socket,
+          tls->ctx->connection_event_cb(CONN_CLOSED, con->socket,
               con->this_transportid, tls->ctx->cb_data);
         }
-        close(*socket);
+        close(con->socket);
         tcpls->nbr_tcp_streams--;
         con->socket = 0;
-        list_free(socklist);
         return ret;
       }
       else {
         /* We have stuff to decrypts */
-        tcpls->socket_rcv = *socket;
+        tcpls->socket_rcv = con->socket;
         int count_streams = count_streams_from_socket(tcpls, tcpls->socket_rcv);
         /** The first message over the fist connection, server-side, we do not
          * have streams attach yet, it is coming! */
@@ -1151,7 +1142,6 @@ int tcpls_receive(ptls_t *tls, ptls_buffer_t *decryptbuf, size_t nbytes, struct 
         size_t input_size = ret;
         size_t consumed;
         if (count_streams == 0) {
-          connect_info_t *con = get_con_info_from_socket(tls->tcpls, *socket);
           while (input_off < input_size) {
             ptls_aead_context_t *remember_aead = tcpls->tls->traffic_protection.dec.aead;
             do {
@@ -1194,7 +1184,6 @@ int tcpls_receive(ptls_t *tls, ptls_buffer_t *decryptbuf, size_t nbytes, struct 
           }
         }
         if (rret != 0) {
-          list_free(socklist);
           return ret;
         }
         nbytes -= (decryptbuf->off-initial_off-received_data);
@@ -1203,7 +1192,6 @@ int tcpls_receive(ptls_t *tls, ptls_buffer_t *decryptbuf, size_t nbytes, struct 
       }
     }
   }
-  list_free(socklist);
   if (tcpls->fragment_length)
     return TCPLS_HOLD_DATA_TO_READ;
   else if (heap_size(tcpls->priority_q))
