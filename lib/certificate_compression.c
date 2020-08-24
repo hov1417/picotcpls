@@ -70,7 +70,7 @@ FoundBrotli:
     if (push_status_request && self->with_ocsp_status.uncompressed_length != 0)
         entry = &self->with_ocsp_status;
 
-    ptls_push_message(emitter, key_sched, PTLS_HANDSHAKE_TYPE_COMPRESSED_CERTIFICATE, {
+    ptls_push_message(tls, emitter, key_sched, PTLS_HANDSHAKE_TYPE_COMPRESSED_CERTIFICATE, {
         ptls_buffer_push16(emitter->buf, PTLS_CERTIFICATE_COMPRESSION_ALGORITHM_BROTLI);
         ptls_buffer_push24(emitter->buf, entry->uncompressed_length);
         ptls_buffer_push_block(emitter->buf, 3, { ptls_buffer_pushv(emitter->buf, entry->bytes.base, entry->bytes.len); });

@@ -12,7 +12,7 @@ IF (WITH_DTRACE)
     MESSAGE(STATUS "Enabling USDT support")
 ENDIF ()
 
-SET(CMAKE_C_FLAGS "-std=c99 -O2 -Wall ${CC_WARNING_FLAGS} ${CMAKE_C_FLAGS}")
+SET(CMAKE_C_FLAGS "-std=c99 -g3 -Wall ${CC_WARNING_FLAGS} ${CMAKE_C_FLAGS}")
 INCLUDE_DIRECTORIES(
     deps/cifra/src/ext
     deps/cifra/src
@@ -39,6 +39,7 @@ SET(CORE_FILES
     lib/picotls.c
     lib/picotcpls.c
     lib/containers.c
+    lib/heap.c
     lib/pembase64.c)
 SET(CORE_TEST_FILES
     t/picotls.c)

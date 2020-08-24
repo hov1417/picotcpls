@@ -104,8 +104,11 @@ static int handle_mpjoin(int socket, uint8_t *connid, uint8_t *cookie, uint32_t 
     if (!memcmp(ctcpls->tcpls->connid, connid, CONNID_LEN)) {
       for (int j = 0; j < conntcpls->size; j++) {
         ctcpls2 = list_get(conntcpls, j);
-        if (ctcpls2->conn_fd == socket)
+        if (ctcpls2->conn_fd == socket) {
+          /*if (ctcpls2->tcpls)*/
+            /*tcpls_free(ctcpls2->tcpls);*/
           ctcpls2->tcpls = ctcpls->tcpls;
+        }
       }
       return tcpls_accept(ctcpls->tcpls, socket, cookie, transportid);
     }
@@ -122,7 +125,7 @@ static int handle_client_stream_event(tcpls_t *tcpls, tcpls_event_t event, strea
       list_add(data->streamlist, &streamid);
       break;
     case STREAM_CLOSED:
-      fprintf(stderr, "Handling stream_closed callback\n");
+      fprintf(stderr, "Handling stream_closed callback, removing stream %u\n", streamid);
       list_remove(data->streamlist, &streamid);
       break;
     default: break;
@@ -239,11 +242,13 @@ static void tcpls_add_ips(tcpls_t *tcpls, struct sockaddr_storage *sa_our,
 static int handle_tcpls_read(tcpls_t *tcpls, int socket) {
 
   int ret;
-  if (!ptls_handshake_is_complete(tcpls->tls)) {
+  if (!ptls_handshake_is_complete(tcpls->tls) && tcpls->tls->state <
+      PTLS_STATE_SERVER_EXPECT_FINISHED) {
     ptls_handshake_properties_t prop = {NULL};
     memset(&prop, 0, sizeof(prop));
     prop.received_mpjoin_to_process = &handle_mpjoin;
     prop.socket = socket;
+    fprintf(stderr, "calling tcpls_handshake on socket %d\n", socket);
     if ((ret = tcpls_handshake(tcpls->tls, &prop)) != 0) {
       if (ret == PTLS_ERROR_HANDSHAKE_IS_MPJOIN) {
         return ret;
@@ -252,33 +257,42 @@ static int handle_tcpls_read(tcpls_t *tcpls, int socket) {
     }
     return 0;
   }
-  uint8_t buf[16384];
-  if ((ret = tcpls_receive(tcpls->tls, buf, 16384, NULL)) < 0) {
+  ptls_buffer_t buf;
+  ptls_buffer_init(&buf, "", 0);
+  struct timeval timeout;
+  memset(&timeout, 0, sizeof(timeout));
+  while ((ret = tcpls_receive(tcpls->tls, &buf, 26276, &timeout)) == TCPLS_HOLD_DATA_TO_READ)
+    ;
+  if (ret < 0) {
     fprintf(stderr, "tcpls_receive returned %d\n",ret);
-    return -1;
   }
+  ret = buf.off;
+  ptls_buffer_dispose(&buf);
   return ret;
 }
 
 static int handle_tcpls_write(tcpls_t *tcpls, struct conn_to_tcpls *conntotcpls,  int inputfd) {
-  static const size_t block_size = 16384;
+  static const size_t block_size = 8192;
   uint8_t buf[block_size];
   int ret, ioret;
   while ((ioret = read(inputfd, buf, block_size)) == -1 && errno == EINTR)
     ;
   if (ioret > 0) {
     if((ret = tcpls_send(tcpls->tls, conntotcpls->streamid, buf, ioret)) < 0) {
-      fprintf(stderr, "tcpls_send returned %d\n for sending on streamid %u",
+      fprintf(stderr, "tcpls_send returned %d\n for sending on streamid %u\n",
           ret, conntotcpls->streamid);
       return -1;
     }
-    fprintf(stderr, "sending %d bytes on stream %u \n", ret, conntotcpls->streamid);
+    if (ret < ioret) {
+      fprintf(stderr, "sending %d bytes on stream %u; not everything has been sent \n", ret, conntotcpls->streamid);
+    }
   } else if (ioret == 0) {
     /* closed */
-    fprintf(stderr, "End-of-file, closing the connection\n");
+    fprintf(stderr, "End-of-file, closing the connection linked to stream id\
+        %u\n", conntotcpls->streamid);
     conntotcpls->wants_to_write = 0;
-    close(inputfd);
-    inputfd = -1;
+    /*close(inputfd);*/
+    /*inputfd = -1;*/
   }
   return 0;
 }
@@ -294,6 +308,7 @@ static int handle_client_connection(tcpls_t *tcpls, struct cli_data *data) {
   printf("Handshake done\n");
   fd_set readfds, writefds, exceptfds;
   int has_migrated = 0;
+  int has_remigrated = 0;
   int received_data = 0;
   int mB_received = 0;
   struct timeval timeout;
@@ -322,17 +337,44 @@ static int handle_client_connection(tcpls_t *tcpls, struct cli_data *data) {
       if (FD_ISSET(*socket, &readfds)) {
         if ((ret = handle_tcpls_read(tcpls, *socket)) < 0) {
           fprintf(stderr, "handle_tcpls_read returned %d\n",ret);
+          break;
         }
         received_data += ret;
         if (received_data / 1000000 > mB_received) {
           mB_received++;
           printf("Received %d MB\n",mB_received);
         }
-        /*break;*/
+        break;
       }
     }
+    if (received_data >= 8000000  && !has_remigrated) {
+      has_remigrated = 1;
+      struct timeval timeout;
+      timeout.tv_sec = 5;
+      timeout.tv_usec = 0;
+      tcpls_connect(tcpls->tls, NULL, (struct sockaddr*) &tcpls->v4_addr_llist->addr, &timeout);
+      int socket = 0;
+      connect_info_t *con = NULL;
+      for (int i = 0; i < tcpls->connect_infos->size; i++) {
+        con = list_get(tcpls->connect_infos, i);
+        if (con->dest) {
+          socket = con->socket;
+          break;
+        }
+      }
+      prop.socket = socket;
+      prop.client.transportid = con->this_transportid;
+      prop.client.mpjoin = 1;
+      tcpls_handshake(tcpls->tls, &prop);
+
+      streamid_t streamid = tcpls_stream_new(tcpls->tls, NULL, (struct sockaddr*)
+          &tcpls->v4_addr_llist->addr);
+      tcpls_streams_attach(tcpls->tls, 0, 1);
+      /** closing the stream id 1 */
+      tcpls_stream_close(tcpls->tls, 1, 1);
+    }
     /** We test a migration */
-    if (received_data >= 5000000 && !has_migrated) {
+    else if (received_data >= 2000000 && !has_migrated) {
       has_migrated = 1;
       int socket = 0;
       connect_info_t *con = NULL;
@@ -354,8 +396,6 @@ static int handle_client_connection(tcpls_t *tcpls, struct cli_data *data) {
       tcpls_streams_attach(tcpls->tls, 0, 1);
       /** Close the stream on the initial connection */
       streamid_t *streamid2 = list_get(data->streamlist, 0);
-      assert(streamid2);
-      assert(streamid);
       tcpls_stream_close(tcpls->tls, *streamid2, 1);
     }
   }
@@ -691,7 +731,7 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
               conntcpls.is_primary = 1;
             list_add(conn_tcpls, &conntcpls);
             if (tcpls_accept(new_tcpls, conntcpls.conn_fd, NULL, 0) < 0)
-              fprintf(stderr, "tcpls_accept returned -1");
+              fprintf(stderr, "tcpls_accept returned -1\n");
           }
         }
       }
@@ -758,7 +798,7 @@ static int run_client(struct sockaddr_storage *sa_our, struct sockaddr_storage
   timeout.tv_usec = 0;
   int err = tcpls_connect(tcpls->tls, NULL, NULL, &timeout);
   if (err){
-    fprintf(stderr, "tcpls_connect failed with err %d", err);
+    fprintf(stderr, "tcpls_connect failed with err %d\n", err);
     return 1;
   }
 

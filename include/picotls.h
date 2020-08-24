@@ -36,7 +36,6 @@ extern "C" {
 #include <stddef.h>
 #include "picotcpls.h"
 
-
 #if __GNUC__ >= 3
 #define PTLS_LIKELY(x) __builtin_expect(!!(x), 1)
 #define PTLS_UNLIKELY(x) __builtin_expect(!!(x), 0)
@@ -217,7 +216,8 @@ extern "C" {
 #define PTLS_CONTENT_TYPE_ALERT 21
 #define PTLS_CONTENT_TYPE_HANDSHAKE 22
 #define PTLS_CONTENT_TYPE_APPDATA 23
-#define PTLS_CONTENT_TYPE_TCPLS_OPTION 24
+#define PTLS_CONTENT_TYPE_TCPLS_CONTROL 24
+#define PTLS_CONTENT_TYPE_TCPLS_DATA 25
 
 #define PTLS_PSK_KE_MODE_PSK 0
 #define PTLS_PSK_KE_MODE_PSK_DHE 1
@@ -522,7 +522,7 @@ extern "C" {
     struct st_ptls_traffic_protection_t *enc;
     size_t record_header_length;
     int (*begin_message)(struct st_ptls_message_emitter_t *self);
-    int (*commit_message)(struct st_ptls_message_emitter_t *self);
+    int (*commit_message)(ptls_t *tls, struct st_ptls_message_emitter_t *self);
   } ptls_message_emitter_t;
 
   /**
@@ -1371,13 +1371,13 @@ typedef struct st_ptls_log_event_t {
             ptls__key_schedule_update_hash(_key_sched, _buf->base + mess_start, _buf->off - mess_start);                           \
     } while (0)
 
-#define ptls_push_message(emitter, key_sched, type, block)                                                                         \
+#define ptls_push_message(tls, emitter, key_sched, type, block)                                                                         \
     do {                                                                                                                           \
         ptls_message_emitter_t *_emitter = (emitter);                                                                              \
         if ((ret = _emitter->begin_message(_emitter)) != 0)                                                                        \
             goto Exit;                                                                                                             \
         ptls_buffer_push_message_body(_emitter->buf, (key_sched), (type), block);                                                  \
-        if ((ret = _emitter->commit_message(_emitter)) != 0)                                                                       \
+        if ((ret = _emitter->commit_message(tls, _emitter)) != 0)                                                                       \
             goto Exit;                                                                                                             \
     } while (0)
 
@@ -1651,7 +1651,7 @@ static size_t ptls_aead_decrypt(ptls_aead_context_t *ctx, void *output, const vo
                                 const void *aad, size_t aadlen);
 
 
-int buffer_encrypt_record(ptls_buffer_t *buf, size_t rec_start, ptls_aead_context_t *aead);
+int buffer_encrypt_record(ptls_t *tls, ptls_buffer_t *buf, size_t rec_start, ptls_aead_context_t *aead);
 
 #define buffer_push_record(buf, type, block)                                                                                       \
     do {                                                                                                                           \
@@ -1659,7 +1659,7 @@ int buffer_encrypt_record(ptls_buffer_t *buf, size_t rec_start, ptls_aead_contex
         ptls_buffer_push_block((buf), 2, block);                                                                                   \
     } while (0)
 
-int buffer_push_encrypted_records(ptls_buffer_t *buf, uint8_t type, const uint8_t *src, size_t len,
+int buffer_push_encrypted_records(ptls_t *tls, ptls_buffer_t *buf, uint8_t type, const uint8_t *src, size_t len,
                                          ptls_aead_context_t *aead);
 
 int update_send_key(ptls_t *tls, ptls_buffer_t *_sendbuf, int request_update);

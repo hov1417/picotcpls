@@ -61,7 +61,6 @@
 #include "containers.h"
 #include "picotls.h"
 #include "picotcpls.h"
-
 /** Forward declarations */
 static int tcpls_init_context(ptls_t *ptls, const void *data, size_t datalen,
     tcpls_enum_t type, uint8_t setlocal, uint8_t settopeer);
@@ -73,7 +72,7 @@ static tcpls_stream_t *stream_new(ptls_t *tcpls, streamid_t streamid,
     connect_info_t *con, int is_ours);
 static void stream_free(tcpls_stream_t *stream);
 static int cmp_times(struct timeval *t1, struct timeval *t2);
-static int stream_send_control_message(ptls_buffer_t *sendbuf, ptls_aead_context_t *enc,
+static int stream_send_control_message(ptls_t *tls, ptls_buffer_t *sendbuf, ptls_aead_context_t *enc,
     const void *inputinfo, tcpls_enum_t message, uint32_t message_len);
 static connect_info_t *get_con_info_from_socket(tcpls_t *tcpls, int socket);
 static connect_info_t *get_best_con(tcpls_t *tcpls);
@@ -91,7 +90,8 @@ static int new_stream_derive_aead_context(ptls_t *tls, tcpls_stream_t *stream, i
 static int handle_connect(tcpls_t *tcpls, tcpls_v4_addr_t *src, tcpls_v4_addr_t
     *dest, tcpls_v6_addr_t *src6, tcpls_v6_addr_t *dest6, unsigned short sa_family,
     int *nfds, connect_info_t *coninfo);
-
+static int multipath_merge_buffers(tcpls_t *tcpls, ptls_buffer_t *decryptbuf, int nbytes);
+static int cmp_mpseq(void *mpseq1, void *mpseq2);
 /**
  * Create a new TCPLS object
  */
@@ -121,9 +121,15 @@ void *tcpls_new(void *ctx, int is_server) {
   // init tcpls stuffs
   tcpls->sendbuf = malloc(sizeof(*tcpls->sendbuf));
   tcpls->recvbuf = malloc(sizeof(*tcpls->recvbuf));
+  tcpls->rec_reordering = malloc(sizeof(*tcpls->rec_reordering));
   tcpls->tls = tls;
   ptls_buffer_init(tcpls->sendbuf, "", 0);
   ptls_buffer_init(tcpls->recvbuf, "", 0);
+  ptls_buffer_init(tcpls->rec_reordering, "", 0);
+  /** From the heap API, a NULL cmp function compares keys as integers, which is
+   * what we need */
+  tcpls->priority_q = malloc(sizeof(*tcpls->priority_q));
+  heap_create(tcpls->priority_q, 0, cmp_mpseq);
   tcpls->tcpls_options = new_list(sizeof(tcpls_options_t), NBR_SUPPORTED_TCPLS_OPTIONS);
   tcpls->streams = new_list(sizeof(tcpls_stream_t), 3);
   tcpls->connect_infos = new_list(sizeof(connect_info_t), 2);
@@ -438,6 +444,7 @@ int tcpls_connect(ptls_t *tls, struct sockaddr *src, struct sockaddr *dest,
           if (getsockopt(con->socket, SOL_SOCKET, SO_ERROR, &result, &reslen) < 0) {
             con->state = CLOSED;
             close(con->socket);
+            con->socket = 0;
             break;
           }
           if (result != 0) {
@@ -447,6 +454,7 @@ int tcpls_connect(ptls_t *tls, struct sockaddr *src, struct sockaddr *dest,
             close(con->socket);
             nbr_errors++;
             /** Callback! */
+            con->socket = 0;
             break;
           }
           /** we connected! */
@@ -602,6 +610,7 @@ Exit:
     close(socket);
     tls->ctx->connection_event_cb(CONN_CLOSED, socket, con->this_transportid,
         tls->ctx->cb_data);
+    con->socket = 0;
   }
   ptls_buffer_dispose(&sendbuf);
   return -1;
@@ -687,7 +696,7 @@ int tcpls_accept(tcpls_t *tcpls, int socket, uint8_t *cookie, uint32_t transport
     uint8_t input[4+4];
     memcpy(input, &newconn.this_transportid, 4);
     memcpy(&input[4], &transportid, 4);
-    stream_send_control_message(tcpls->sendbuf, tcpls->tls->traffic_protection.enc.aead, input, TRANSPORT_NEW, 8);
+    stream_send_control_message(tcpls->tls, tcpls->sendbuf, tcpls->tls->traffic_protection.enc.aead, input, TRANSPORT_NEW, 8);
     /*connect_info_t *con = get_primary_con_info(tcpls);*/
     int ret;
     ret = send(socket, tcpls->sendbuf->base+tcpls->send_start,
@@ -854,7 +863,7 @@ int tcpls_streams_attach(ptls_t *tls, streamid_t streamid, int sendnow) {
       /** send the stream id to the peer */
       memcpy(input, &stream->streamid, 4);
       memcpy(&input[4], &stream->con->peer_transportid, 4);
-      stream_send_control_message(stream->con->sendbuf, ctx_to_use, input, STREAM_ATTACH, 8);
+      stream_send_control_message(tls, stream->con->sendbuf, ctx_to_use, input, STREAM_ATTACH, 8);
       stream->con->send_stream_attach_in_sendbuf_pos = stream->con->sendbuf->off;
       stream->need_sending_attach_event = 0;
       tcpls->check_stream_attach_sent = 1;
@@ -888,7 +897,7 @@ static int stream_close_helper(tcpls_t *tcpls, tcpls_stream_t *stream, int type,
   /** send the stream id to the peer */
   memcpy(input, &stream->streamid, 4);
   /** queue the message in the sending buffer */
-  stream_send_control_message(stream->con->sendbuf, stream->aead_enc, input, type, 4);
+  stream_send_control_message(tcpls->tls, stream->con->sendbuf, stream->aead_enc, input, type, 4);
   if (sendnow) {
     int ret;
     /*connect_info_t *con = get_primary_con_info(tcpls);*/
@@ -974,7 +983,7 @@ ssize_t tcpls_send(ptls_t *tls, streamid_t streamid, const void *input, size_t n
     memcpy(input, &stream->streamid, 4);
     memcpy(&input[4], &peer_transportid, 4);
     /** Add a stream message creation to the sending buffer ! */
-    stream_send_control_message(stream->con->sendbuf, tls->traffic_protection.enc.aead, input, STREAM_ATTACH, 8);
+    stream_send_control_message(tcpls->tls, stream->con->sendbuf, tls->traffic_protection.enc.aead, input, STREAM_ATTACH, 8);
     /** To check whether we sent it and if the stream becomes usable */
     stream->con->send_stream_attach_in_sendbuf_pos = stream->con->sendbuf->off;
     tcpls->check_stream_attach_sent = 1;
@@ -1026,6 +1035,7 @@ ssize_t tcpls_send(ptls_t *tls, streamid_t streamid, const void *input, size_t n
       //over the secondary path
       if (tls->ctx->failover == 1) {
         close(stream->con->socket);
+        stream->con->socket = 0;
         /** get the fastest CONNECTED connection */
         connect_info_t *failover_con = get_best_con(tcpls);
         if (!failover_con) {
@@ -1061,7 +1071,7 @@ ssize_t tcpls_send(ptls_t *tls, streamid_t streamid, const void *input, size_t n
  * // TODO adding configurable callbacks for TCPLS events
  */
 
-ssize_t tcpls_receive(ptls_t *tls, void *buf, size_t nbytes, struct timeval *tv) {
+int tcpls_receive(ptls_t *tls, ptls_buffer_t *decryptbuf, size_t nbytes, struct timeval *tv) {
   fd_set rset;
   int ret, selectret;
   tcpls_t *tcpls = tls->tcpls;
@@ -1071,6 +1081,18 @@ ssize_t tcpls_receive(ptls_t *tls, void *buf, size_t nbytes, struct timeval *tv)
   int received_data = 0;
   int maxfd = 0;
   int initialnbytes = nbytes;
+  uint32_t initial_off = decryptbuf->off;
+  // check whether we don't hold application data to deliver
+  nbytes -= multipath_merge_buffers(tcpls, decryptbuf, nbytes);
+  if (!nbytes) {
+    // no need to go further
+    if (tcpls->fragment_length)
+      return TCPLS_HOLD_DATA_TO_READ;
+    else if (heap_size(tcpls->priority_q))
+      return TCPLS_HOLD_OUT_OF_ORDER_DATA_TO_READ;
+    else
+      return TCPLS_OK;
+  }
   for (int i = 0; i < tcpls->connect_infos->size; i++) {
     con = list_get(tcpls->connect_infos, i);
     if (con->state != CLOSED) {
@@ -1081,7 +1103,7 @@ ssize_t tcpls_receive(ptls_t *tls, void *buf, size_t nbytes, struct timeval *tv)
     }
   }
   selectret = select(maxfd+1, &rset, NULL, NULL, tv);
-  if (selectret == -1) {
+  if (selectret <= 0) {
     list_free(socklist);
     return -1;
   }
@@ -1091,8 +1113,8 @@ ssize_t tcpls_receive(ptls_t *tls, void *buf, size_t nbytes, struct timeval *tv)
   int recvlen, remainder;
   remainder = nbytes % selectret;
   recvlen = nbytes/selectret;
-  ptls_buffer_t decryptbuf;
-  ptls_buffer_init(&decryptbuf, "", 0);
+  /*ptls_buffer_t decryptbuf;*/
+  /*ptls_buffer_init(&decryptbuf, "", 0);*/
   for (int i =  0; i < socklist->size && nbytes > 0; i++) {
     socket = list_get(socklist, i);
     if (FD_ISSET(*socket, &rset)) {
@@ -1114,6 +1136,7 @@ ssize_t tcpls_receive(ptls_t *tls, void *buf, size_t nbytes, struct timeval *tv)
         }
         close(*socket);
         tcpls->nbr_tcp_streams--;
+        con->socket = 0;
         list_free(socklist);
         return ret;
       }
@@ -1133,12 +1156,14 @@ ssize_t tcpls_receive(ptls_t *tls, void *buf, size_t nbytes, struct timeval *tv)
             ptls_aead_context_t *remember_aead = tcpls->tls->traffic_protection.dec.aead;
             do {
               consumed = input_size - input_off;
-              rret = ptls_receive(tls, &decryptbuf, con->buffrag, input + input_off, &consumed);
+              rret = ptls_receive(tls, decryptbuf, con->buffrag, input + input_off, &consumed);
               if (rret == 0)
                 input_off += consumed;
             } while (rret == 0 && input_off < input_size);
             /** We may have received a stream attach that changed the aead*/
             tcpls->tls->traffic_protection.dec.aead = remember_aead;
+            /* check whether we can pull records from our priority queue to
+             * reorder */
           }
         }
         else {
@@ -1158,30 +1183,33 @@ ssize_t tcpls_receive(ptls_t *tls, void *buf, size_t nbytes, struct timeval *tv)
               input_size = ret;
               do {
                 consumed = input_size - input_off;
-                rret = ptls_receive(tls, &decryptbuf, buf_to_use, input + input_off, &consumed);
+                rret = ptls_receive(tls, decryptbuf, buf_to_use, input + input_off, &consumed);
                 input_off += consumed;
               } while (rret == 0 && input_off < input_size);
-
+              
               tcpls->tls->traffic_protection.dec.aead = remember_aead;
+              /* check whether we can pull records from our priority queue to
+               * reorder */
             }
           }
         }
         if (rret != 0) {
-          ptls_buffer_dispose(&decryptbuf);
           list_free(socklist);
-          fprintf(stderr, "tcpls_receive got a %d error message code\n", rret);
           return ret;
         }
-        memcpy(buf+received_data, decryptbuf.base, decryptbuf.off);
-        received_data += decryptbuf.off;
-        nbytes-=decryptbuf.off;
-        decryptbuf.off = 0;
+        nbytes -= (decryptbuf->off-initial_off-received_data);
+        nbytes -= multipath_merge_buffers(tcpls, decryptbuf, nbytes);
+        received_data += (decryptbuf->off-initial_off-received_data);
       }
     }
   }
-  ptls_buffer_dispose(&decryptbuf);
   list_free(socklist);
-  return received_data;
+  if (tcpls->fragment_length)
+    return TCPLS_HOLD_DATA_TO_READ;
+  else if (heap_size(tcpls->priority_q))
+    return TCPLS_HOLD_OUT_OF_ORDER_DATA_TO_READ;
+  else
+    return TCPLS_OK;
 }
 
 /**
@@ -1225,8 +1253,8 @@ int ptls_send_tcpoption(ptls_t *tls, ptls_buffer_t *sendbuf, tcpls_enum_t type)
     memcpy(input, &option->type, sizeof(option->type));
     memcpy(input+sizeof(option->type), &option->data->len, 4);
     memcpy(input+sizeof(option->type)+4, option->data->base, option->data->len);
-    return buffer_push_encrypted_records(sendbuf,
-        PTLS_CONTENT_TYPE_TCPLS_OPTION, input,
+    return buffer_push_encrypted_records(tls, sendbuf,
+        PTLS_CONTENT_TYPE_TCPLS_CONTROL, input,
         option->data->len+sizeof(option->type)+4, tls->traffic_protection.enc.aead);
   }
   else {
@@ -1234,8 +1262,8 @@ int ptls_send_tcpoption(ptls_t *tls, ptls_buffer_t *sendbuf, tcpls_enum_t type)
     memcpy(input, &option->type, sizeof(option->type));
     memcpy(input+sizeof(option->type), option->data->base, option->data->len);
 
-    return buffer_push_encrypted_records(sendbuf,
-        PTLS_CONTENT_TYPE_TCPLS_OPTION, input,
+    return buffer_push_encrypted_records(tls, sendbuf,
+        PTLS_CONTENT_TYPE_TCPLS_CONTROL, input,
         option->data->len+sizeof(option->type), tls->traffic_protection.enc.aead);
   }
 }
@@ -1292,6 +1320,80 @@ int ptls_set_bpf_cc(ptls_t *ptls, const uint8_t *bpf_prog_bytecode, size_t bytec
 }
 
 /*===================================Internal========================================*/
+
+static int cmp_mpseq(void *mpseq1, void *mpseq2) {
+  
+    register uint32_t key1_v = *((uint32_t*)mpseq1);
+    register uint32_t key2_v = *((uint32_t*)mpseq2);
+
+    // Perform the comparison
+    if (key1_v < key2_v)
+        return -1;
+    else if (key1_v == key2_v)
+        return 0;
+    else return 1;
+}
+
+/**
+ *
+ */
+
+static int multipath_merge_buffers(tcpls_t *tcpls, ptls_buffer_t *decryptbuf, int nbytes) {
+  // We try to pull bytes from the reordering buffer only if there is something
+  // within our priorty queue, and we have > 0 nbytes to get to the application
+  
+  uint32_t initial_pos = decryptbuf->off;
+  int ret;
+  if (tcpls->fragment_length > 0) {
+    if (tcpls->fragment_length <= nbytes) {
+      ptls_buffer_pushv(decryptbuf, tcpls->rec_reordering->base+tcpls->fragment_pos, tcpls->fragment_length);
+      nbytes -= tcpls->fragment_length;
+      tcpls->fragment_length = 0;
+      tcpls->fragment_pos = 0;
+    }
+    else {
+      ptls_buffer_pushv(decryptbuf, tcpls->rec_reordering->base+tcpls->fragment_pos, nbytes);
+      tcpls->fragment_length = tcpls->fragment_length-nbytes;
+      tcpls->fragment_pos = tcpls->fragment_pos+nbytes;
+      nbytes = 0;
+    }
+  }
+  if (heap_size(tcpls->priority_q) > 0 && nbytes) {
+    uint32_t *mpseq;
+    uint32_t *buf_position_data;
+    ret = heap_min(tcpls->priority_q, (void **) &mpseq, (void **)&buf_position_data);
+    while (ret && *mpseq == tcpls->next_expected_mpseq && nbytes) {
+      size_t length = *(size_t *) (tcpls->rec_reordering->base+*buf_position_data);
+      if (length <= nbytes) {
+        ptls_buffer_pushv(decryptbuf, tcpls->rec_reordering->base+*buf_position_data+sizeof(size_t), length);
+        nbytes -= length;
+      }
+      else {
+        /** We should retain that we did not read everything within
+         * rec_recording
+         **/
+        ptls_buffer_pushv(decryptbuf, tcpls->rec_reordering->base+*buf_position_data+sizeof(size_t), nbytes);
+        tcpls->fragment_length = length-nbytes;
+        tcpls->fragment_pos = *buf_position_data+nbytes;
+        nbytes = 0;
+      }
+      heap_delmin(tcpls->priority_q, (void**)&mpseq, (void**)&buf_position_data);
+      tcpls->next_expected_mpseq++;
+      free(mpseq);
+      free(buf_position_data);
+      if (nbytes)
+        ret = heap_min(tcpls->priority_q, (void **) &mpseq, (void **) &buf_position_data);
+    }
+  }
+  /** we have nothing left in the heap and no fragments, we can clean rec_reordering! */
+  if (heap_size(tcpls->priority_q) == 0 && tcpls->fragment_length == 0 && tcpls->rec_reordering->off)
+    ptls_buffer_dispose(tcpls->rec_reordering);
+  return decryptbuf->off-initial_pos;
+Exit:
+  return -1;
+}
+
+
 
 /**
  * Verify whether the position of the stream attach event event has been
@@ -1385,6 +1487,7 @@ static int handle_connect(tcpls_t *tcpls, tcpls_v4_addr_t *src, tcpls_v4_addr_t
             sizeof(dest->addr)) < 0 && errno != EINPROGRESS) {
         coninfo->state = CLOSED;
         close(coninfo->socket);
+        coninfo->socket = 0;
         return -1;
       }
     }
@@ -1432,13 +1535,13 @@ static tcpls_stream_t *stream_helper_new(tcpls_t *tcpls, connect_info_t *con) {
  *    - send a acknowledgment
  */
 
-static int stream_send_control_message(ptls_buffer_t *sendbuf, ptls_aead_context_t *aead,
+static int stream_send_control_message(ptls_t *tls, ptls_buffer_t *sendbuf, ptls_aead_context_t *aead,
     const void *inputinfo, tcpls_enum_t tcpls_message, uint32_t message_len) {
   uint8_t input[message_len+sizeof(tcpls_message)];
   memcpy(input, &tcpls_message, sizeof(tcpls_message));
   memcpy(input+sizeof(tcpls_message), inputinfo, message_len);
-  return buffer_push_encrypted_records(sendbuf,
-      PTLS_CONTENT_TYPE_TCPLS_OPTION, input,
+  return buffer_push_encrypted_records(tls, sendbuf,
+      PTLS_CONTENT_TYPE_TCPLS_CONTROL, input,
       message_len+sizeof(tcpls_message), aead);
 }
 
@@ -1525,7 +1628,7 @@ static int  tcpls_init_context(ptls_t *ptls, const void *data, size_t datalen,
  * should check our parsing and send alert messages upon inapropriate data)
  */
 
-int handle_tcpls_extension_option(ptls_t *ptls, tcpls_enum_t type,
+int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
     const uint8_t *input, size_t inputlen) {
   if (!ptls->tcpls->tcpls_options_confirmed)
     return -1;
@@ -1619,21 +1722,23 @@ int handle_tcpls_extension_option(ptls_t *ptls, tcpls_enum_t type,
          /** What to do? this should not happen - Close the connection*/
          return PTLS_ERROR_STREAM_NOT_FOUND;
        }
-       /** TODO close the state if this is the only stream attached to this con*/
-       /** Note, we current assume only one stream per address */
-       if (type == STREAM_CLOSE_ACK) {
-         close(stream->con->socket);
-         stream->con->state = CLOSED;
-       }
-       else if (type == STREAM_CLOSE) {
-         stream_close_helper(ptls->tcpls, stream, STREAM_CLOSE_ACK, 1);
-       }
        if (ptls->ctx->stream_event_cb)
          ptls->ctx->stream_event_cb(ptls->tcpls, STREAM_CLOSED, stream->streamid,
              stream->con->this_transportid, ptls->ctx->cb_data);
-       if (ptls->ctx->connection_event_cb && type == STREAM_CLOSE_ACK)
-         ptls->ctx->connection_event_cb(CONN_CLOSED, stream->con->socket,
-             stream->con->this_transportid, ptls->ctx->cb_data);
+
+       if (type == STREAM_CLOSE) {
+         stream_close_helper(ptls->tcpls, stream, STREAM_CLOSE_ACK, 1);
+       }
+       else if (ptls->ctx->connection_event_cb && type == STREAM_CLOSE_ACK) {
+         /** if this is the last stream attached to this */
+         if (count_streams_from_socket(ptls->tcpls, stream->con->socket) == 1) {
+           close(stream->con->socket);
+           stream->con->state = CLOSED;
+           ptls->ctx->connection_event_cb(CONN_CLOSED, stream->con->socket,
+               stream->con->this_transportid, ptls->ctx->cb_data);
+           stream->con->socket = 0;
+         }
+       }
        /** Free AEAD contexts */
        stream_free(stream);
        list_remove(ptls->tcpls->streams, stream);
@@ -1700,26 +1805,62 @@ int handle_tcpls_extension_option(ptls_t *ptls, tcpls_enum_t type,
       }
       break;
     default:
-      printf("Unsuported option?");
+      fprintf(stderr, "Unsuported option?");
       return -1;
   }
  return 0;
 }
 
 /**
- * Handle single record and varlen options with possibly many records
+ * Handle single tcpls data record
+ */
+
+
+int handle_tcpls_data_record(ptls_t *tls, struct st_ptls_record_t *rec)
+{
+  tcpls_t *tcpls = tls->tcpls;
+  uint32_t mpseq = *(uint32_t*) rec->fragment;
+  int ret = 0;
+  if (tcpls->next_expected_mpseq == mpseq) {
+    // then we push this fragment in the received buffer
+    tcpls->next_expected_mpseq++;
+    return 0;
+  }
+  else {
+    // push the record to the reordering buffer, and add it to the priority
+    // queue
+    if (tcpls->rec_reordering->base == NULL) {
+      ptls_buffer_init(tcpls->rec_reordering, "", 0);
+    }
+    uint32_t *mpseq_ptr = (uint32_t*) malloc(sizeof(uint32_t));
+    *mpseq_ptr = mpseq;
+    ptls_buffer_pushv(tcpls->rec_reordering, &rec->length,
+        sizeof(rec->length));
+    ptls_buffer_pushv(tcpls->rec_reordering, rec->fragment, rec->length);
+    /** contains length + payload, point to the length*/
+    uint32_t *buf_position_data = (uint32_t*) malloc(sizeof(uint32_t));
+    *buf_position_data = tcpls->rec_reordering->off-rec->length-sizeof(rec->length);
+    heap_insert(tcpls->priority_q, (void *)mpseq_ptr, (void*)buf_position_data);
+    return 1;
+  }
+Exit:
+  return ret;
+}
+
+/**
+ * Handle single control record and varlen options with possibly many records
  *
  * varlen records must be sent over the same stream for appropriate buffering
  * //TODO make the buffering per-stream!
  */
 
-int handle_tcpls_record(ptls_t *tls, struct st_ptls_record_t *rec)
+int handle_tcpls_control_record(ptls_t *tls, struct st_ptls_record_t *rec)
 {
   int ret = 0;
   tcpls_enum_t type;
   uint8_t *init_buf = NULL;
   /** Assumes a TCPLS option holds within 1 record ; else we need to buffer the
-   * option to deliver it to handle_tcpls_extension_option 
+   * option to deliver it to handle_tcpls_cotrol 
    * */
   if (!tls->tcpls_buf) {
     if ((tls->tcpls_buf = malloc(sizeof(*tls->tcpls_buf))) == NULL) {
@@ -1729,7 +1870,7 @@ int handle_tcpls_record(ptls_t *tls, struct st_ptls_record_t *rec)
     memset(tls->tcpls_buf, 0, sizeof(*tls->tcpls_buf));
   }
 
-  type = (tcpls_enum_t) *rec->fragment;
+  type = *(tcpls_enum_t*) rec->fragment;
   /** Check whether type is a variable len option */
   if (is_varlen(type)){
     /*size_t optsize = ntoh32(rec->fragment+sizeof(type));*/
@@ -1753,17 +1894,17 @@ int handle_tcpls_record(ptls_t *tls, struct st_ptls_record_t *rec)
         goto Exit;
       if (tls->tcpls_buf->off == optsize) {
         /** We have all of it */
-        ret = handle_tcpls_extension_option(tls, type, tls->tcpls_buf->base, optsize);
+        ret = handle_tcpls_control(tls, type, tls->tcpls_buf->base, optsize);
         ptls_buffer_dispose(tls->tcpls_buf);
       }
       return ret;
     }
     else {
-      return handle_tcpls_extension_option(tls, type, rec->fragment+sizeof(type)+4, optsize);
+      return handle_tcpls_control(tls, type, rec->fragment+sizeof(type)+4, optsize);
     }
   }
   /** We assume that only Variable size options won't hold into 1 record */
-  return handle_tcpls_extension_option(tls, type, rec->fragment+sizeof(type), rec->length-sizeof(type));
+  return handle_tcpls_control(tls, type, rec->fragment+sizeof(type), rec->length-sizeof(type));
 
 Exit:
   ptls_buffer_dispose(tls->tcpls_buf);
@@ -2086,8 +2227,12 @@ void tcpls_free(tcpls_t *tcpls) {
     return;
   ptls_buffer_dispose(tcpls->recvbuf);
   ptls_buffer_dispose(tcpls->sendbuf);
+  ptls_buffer_dispose(tcpls->rec_reordering);
   free(tcpls->sendbuf);
   free(tcpls->recvbuf);
+  free(tcpls->rec_reordering);
+  heap_destroy(tcpls->priority_q);
+  free(tcpls->priority_q);
   list_free(tcpls->streams);
   connect_info_t *con;
   for (int i = 0; i < tcpls->connect_infos->size; i++) {

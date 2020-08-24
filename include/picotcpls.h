@@ -4,6 +4,7 @@
 #include "picotypes.h"
 #include "picotls.h"
 #include "containers.h"
+#include "heap.h"
 #include <netinet/in.h>
 #define NBR_SUPPORTED_TCPLS_OPTIONS 5
 #define VARSIZE_OPTION_MAX_CHUNK_SIZE 4*16384 /* should be able to hold 4 records before needing to be extended */
@@ -19,6 +20,11 @@
 #define TCPLS_SIGNAL_SIZE 12
 #define STREAM_SENDER_NEW_STREAM_SIZE 4
 #define STREAM_CLOSE_SIZE 4
+
+#define TCPLS_OK 0
+
+#define TCPLS_HOLD_DATA_TO_READ 1
+#define TCPLS_HOLD_OUT_OF_ORDER_DATA_TO_READ 2
 
 #define COOKIE_LEN 16
 #define CONNID_LEN 16
@@ -89,10 +95,14 @@ typedef struct st_connect_info_t {
   /** end positio of the stream control event message in the current sending
    * buffer*/
   int send_stream_attach_in_sendbuf_pos;
-
+  /** Id given for this transport stream */
   uint32_t this_transportid;
+  /** Id of the peer fort this transport stream */
   uint32_t peer_transportid;
+  /** Is this connection primary? Primary means the default one */
   unsigned is_primary : 1;
+  /** RTT of this connection, computed by the client and ?eventually given to the
+   * server TODO*/
   struct timeval connect_time;
   /** Only one is used */
   tcpls_v4_addr_t *src;
@@ -154,8 +164,22 @@ struct st_tcpls_t {
 
   /* Receiving buffer */
   ptls_buffer_t *recvbuf;
+  /* Record buffer for multipath reordering */
+  ptls_buffer_t *rec_reordering;
+  /** If the application asked for less bytes than a full record hold within
+   * the reordering buffer, then we need to save the position of the missing
+   * bytes for delivery at the next tcpls_receive() call */
+  uint32_t fragment_pos;
+  /** length of the saved fragment */
+  uint32_t fragment_length;
+  /** A priority queue to handle reording records */
+  heap *priority_q;
+  /** sending mpseq number */
+  uint32_t send_mpseq;
+  /** next expected receive seq */
+  uint32_t next_expected_mpseq;
   /** Linked List of address to be used for happy eyeball
-   * and for failover 
+   * and for failover
    */
   /** Destination addresses */
   tcpls_v4_addr_t *v4_addr_llist;
@@ -240,7 +264,7 @@ int tcpls_stream_close(ptls_t *tls, streamid_t streamid, int sendnow);
 
 ssize_t tcpls_send(ptls_t *tls, streamid_t streamid, const void *input, size_t nbytes);
 
-ssize_t tcpls_receive(ptls_t *tls, void *input, size_t nbytes, struct timeval *tv);
+int tcpls_receive(ptls_t *tls, ptls_buffer_t *input, size_t nbytes, struct timeval *tv);
 
 int ptls_set_user_timeout(ptls_t *ctx, uint16_t value, uint16_t sec_or_min,
     uint8_t setlocal, uint8_t settopeer);
@@ -256,10 +280,12 @@ void tcpls_free(tcpls_t *tcpls);
 
 /*============================================================================*/
 /** Internal to picotls */
-int handle_tcpls_extension_option(ptls_t *ctx, tcpls_enum_t type,
+
+int handle_tcpls_control(ptls_t *ctx, tcpls_enum_t type,
     const uint8_t *input, size_t len);
 
-int handle_tcpls_record(ptls_t *tls, struct st_ptls_record_t *rec);
+int handle_tcpls_control_record(ptls_t *tls, struct st_ptls_record_t *rec);
+int handle_tcpls_data_record(ptls_t *tls, struct st_ptls_record_t *rec);
 
 int tcpls_failover_signal(tcpls_t *tcpls, ptls_buffer_t *sendbuf);
 
