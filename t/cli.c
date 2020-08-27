@@ -67,6 +67,12 @@ static void shift_buffer(ptls_buffer_t *buf, size_t delta)
   }
 }
 
+typedef enum integration_test_t {
+  T_NOTEST,
+  T_MULTIPATH,
+  T_ZERO_RTT_HANDSHAKE
+} integration_test_t;
+
 struct tcpls_options {
   int timeoutval;
   unsigned int timeout;
@@ -94,7 +100,8 @@ struct cli_data {
 static struct tcpls_options tcpls_options;
 
 /** Simplistic joining procedure for testing */
-static int handle_mpjoin(int socket, uint8_t *connid, uint8_t *cookie, uint32_t transportid, void *cbdata) {
+static int handle_mpjoin(int socket, uint8_t *connid, uint8_t *cookie, uint32_t
+    transportid, void *cbdata) {
   printf("Wooh, we're handling a mpjoin\n");
   list_t *conntcpls = (list_t*) cbdata;
   struct conn_to_tcpls *ctcpls;
@@ -248,7 +255,6 @@ static int handle_tcpls_read(tcpls_t *tcpls, int socket) {
     memset(&prop, 0, sizeof(prop));
     prop.received_mpjoin_to_process = &handle_mpjoin;
     prop.socket = socket;
-    fprintf(stderr, "calling tcpls_handshake on socket %d\n", socket);
     if ((ret = tcpls_handshake(tcpls->tls, &prop)) != 0) {
       if (ret == PTLS_ERROR_HANDSHAKE_IS_MPJOIN) {
         return ret;
@@ -301,8 +307,8 @@ static int handle_server_connection(tcpls_t *tcpls) {
 
   return 0;
 }
-  
-static int handle_client_connection(tcpls_t *tcpls, struct cli_data *data) {
+
+static int handle_client_multipath_test(tcpls_t *tcpls, struct cli_data *data) {
   /** handshake*/
   handle_tcpls_read(tcpls, 0);
   printf("Handshake done\n");
@@ -367,7 +373,7 @@ static int handle_client_connection(tcpls_t *tcpls, struct cli_data *data) {
       prop.client.mpjoin = 1;
       tcpls_handshake(tcpls->tls, &prop);
 
-      streamid_t streamid = tcpls_stream_new(tcpls->tls, NULL, (struct sockaddr*)
+      tcpls_stream_new(tcpls->tls, NULL, (struct sockaddr*)
           &tcpls->v4_addr_llist->addr);
       tcpls_streams_attach(tcpls->tls, 0, 1);
       /** closing the stream id 1 */
@@ -391,13 +397,42 @@ static int handle_client_connection(tcpls_t *tcpls, struct cli_data *data) {
       /** Make a tcpls mpjoin handshake */
       tcpls_handshake(tcpls->tls, &prop);
       /** Create a stream on the new connection */
-      streamid_t streamid = tcpls_stream_new(tcpls->tls, NULL, (struct sockaddr*)
+      tcpls_stream_new(tcpls->tls, NULL, (struct sockaddr*)
           &tcpls->v6_addr_llist->addr);
       tcpls_streams_attach(tcpls->tls, 0, 1);
       /** Close the stream on the initial connection */
       streamid_t *streamid2 = list_get(data->streamlist, 0);
       tcpls_stream_close(tcpls->tls, *streamid2, 1);
     }
+  }
+  return 0;
+}
+
+static int handle_client_zero_rtt_test(tcpls_t *tcpls, struct cli_data *data) {
+  return 0;
+}
+
+static int handle_client_connection(tcpls_t *tcpls, struct cli_data *data,
+    integration_test_t test) {
+  int ret;
+  switch (test) {
+    case T_ZERO_RTT_HANDSHAKE:
+      ret = handle_client_zero_rtt_test(tcpls, data);
+      if (!ret)
+        printf("TEST 0-RTT: SUCCESS");
+      else
+        printf("TEST 0-RTT: FAILURE");
+      break;
+    case T_MULTIPATH:
+      ret = handle_client_multipath_test(tcpls, data);
+      if (!ret)
+        printf("TEST MULTIPATH: SUCCESS");
+      else
+        printf("TEST MULTIPATH: FAILURE");
+      break;
+    case T_NOTEST:
+      printf("NO TEST");
+      exit(1);
   }
   return 0;
 }
@@ -622,7 +657,7 @@ Exit:
 
 static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
     *sa_peers, int nbr_ours, int nbr_peers, ptls_context_t *ctx, const char *input_file,
-    ptls_handshake_properties_t *hsprop, int request_key_update)
+    ptls_handshake_properties_t *hsprop, int request_key_update, integration_test_t test)
 {
   int conn_fd, inputfd, on = 1;
   int listenfd[nbr_ours];
@@ -777,7 +812,7 @@ Exit:
 static int run_client(struct sockaddr_storage *sa_our, struct sockaddr_storage
     *sa_peer, int nbr_our, int nbr_peer,  ptls_context_t *ctx, const char *server_name, const char
     *input_file, ptls_handshake_properties_t *hsprop, int request_key_update,
-    int keep_sender_open)
+    int keep_sender_open, integration_test_t test)
 {
   int fd;
 
@@ -803,7 +838,7 @@ static int run_client(struct sockaddr_storage *sa_our, struct sockaddr_storage
   }
 
   if (ctx->support_tcpls_options) {
-    int ret = handle_client_connection(tcpls, &data);
+    int ret = handle_client_connection(tcpls, &data, test);
     free(hsprop->client.esni_keys.base);
     tcpls_free(tcpls);
     return ret;
@@ -847,6 +882,8 @@ static void usage(const char *cmd)
       "  -y cipher-suite      cipher-suite to be used, e.g., aes128gcmsha256 (default:\n"
       "                       all)\n"
       "  -h                   print this help\n"
+      "  -t                   Use tcpls\n"
+      "  -T intergration_test Precise which integration test is to be run\n"
       "\n"
       "Supported named groups: secp256r1"
 #if PTLS_OPENSSL_HAVE_SECP384R1
@@ -880,6 +917,7 @@ int main(int argc, char **argv)
   ptls_context_t ctx = {ptls_openssl_random_bytes, &ptls_get_time, key_exchanges, cipher_suites};
   ptls_handshake_properties_t hsprop = {{{{NULL}}}};
   const char *host, *port, *input_file = NULL, *esni_file = NULL;
+  integration_test_t test = T_NOTEST;
   struct {
     ptls_key_exchange_context_t *elements[16];
     size_t count;
@@ -1020,12 +1058,23 @@ int main(int argc, char **argv)
                     exit(1);
                   }
                 } break;
+      case 'T':
+                if (strcasecmp(optarg, "multipath") == 0)
+                  test = T_MULTIPATH;
+                else if (strcasecmp(optarg, "zero_rtt") == 0)
+                  test = T_ZERO_RTT_HANDSHAKE;
+                else {
+                  fprintf(stderr, "Unknown integration test: %s\n", optarg);
+                  exit(1);
+                }
+
       case 'h':
                 usage(argv[0]);
                 exit(0);
       case 't':
                 ctx.support_tcpls_options = 1;
                 break;
+
 
       case 'd':
                 if(sscanf(optarg, "%d %d", &tcpls_options.timeoutval, &tcpls_options.is_second) < 0){
@@ -1197,8 +1246,10 @@ int main(int argc, char **argv)
 
 
   if (is_server) {
-    return run_server(sa_ours, sa_peer, nbr_our_addrs, nbr_peer_addrs, &ctx, input_file, &hsprop, request_key_update);
+    return run_server(sa_ours, sa_peer, nbr_our_addrs, nbr_peer_addrs, &ctx,
+        input_file, &hsprop, request_key_update, test);
   } else {
-    return run_client(sa_ours, sa_peer, nbr_our_addrs, nbr_peer_addrs, &ctx, host, input_file, &hsprop, request_key_update, keep_sender_open);
+    return run_client(sa_ours, sa_peer, nbr_our_addrs, nbr_peer_addrs, &ctx,
+        host, input_file, &hsprop, request_key_update, keep_sender_open, test);
   }
 }

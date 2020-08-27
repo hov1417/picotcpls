@@ -902,6 +902,12 @@ typedef struct st_ptls_log_event_t {
          * TCP connection, but which must concert a another TCP connection
          */
         uint32_t transportid;
+        
+        /**
+         * tells tcpls_handshake to perform a 0-RTT TCPLS handshake
+         */
+        unsigned zero_rtt : 1;
+
         /**
          * ESNIKeys (the value of the TXT record, after being base64-"decoded")
          */

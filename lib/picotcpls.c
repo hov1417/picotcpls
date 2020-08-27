@@ -523,10 +523,7 @@ int tcpls_handshake(ptls_t *tls, ptls_handshake_properties_t *properties) {
   if (properties && !socket) {
     socket = properties->socket;
   }
-  if (!tls->is_server && properties && properties->client.mpjoin) {
-    //TODO
-  }
-  else if (!tls->is_server && !socket) {
+  if (!tls->is_server && !socket) {
     connect_info_t *con = get_primary_con_info(tcpls);
     if (!con)
       goto Exit;
