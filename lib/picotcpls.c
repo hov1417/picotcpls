@@ -92,6 +92,9 @@ static int handle_connect(tcpls_t *tcpls, tcpls_v4_addr_t *src, tcpls_v4_addr_t
     int *nfds, connect_info_t *coninfo);
 static int multipath_merge_buffers(tcpls_t *tcpls, ptls_buffer_t *decryptbuf, int nbytes);
 static int cmp_mpseq(void *mpseq1, void *mpseq2);
+static int check_con_has_connected(tcpls_t *tcpls, connect_info_t *con, int *res);
+static void compute_client_rtt(connect_info_t *con, struct timeval *timeout,
+    struct timeval *t_initial, struct timeval *t_previous);
 /**
  * Create a new TCPLS object
  */
@@ -407,7 +410,7 @@ int tcpls_connect(ptls_t *tls, struct sockaddr *src, struct sockaddr *dest,
   }
   /* wait until all connected or the timeout fired */
   int remaining_nfds = nfds;
-  struct timeval t_initial, t_previous, t_current;
+  struct timeval t_initial, t_previous;
   gettimeofday(&t_initial, NULL);
   memcpy(&t_previous, &t_initial, sizeof(t_previous));
   tcpls->nbr_tcp_streams = nfds;
@@ -437,54 +440,27 @@ int tcpls_connect(ptls_t *tls, struct sockaddr *src, struct sockaddr *dest,
     }
     else {
       /** Check first for connection result! */
-      socklen_t reslen = sizeof(result);
       for (int i = 0; i < tcpls->connect_infos->size; i++) {
         con = list_get(tcpls->connect_infos, i);
         if (con->state == CONNECTING && FD_ISSET(con->socket, &wset)) {
-          if (getsockopt(con->socket, SOL_SOCKET, SO_ERROR, &result, &reslen) < 0) {
+          if (check_con_has_connected(tcpls, con, &result) < 0) {
             con->state = CLOSED;
             close(con->socket);
             con->socket = 0;
             break;
           }
           if (result != 0) {
-            fprintf(stderr, "Connect(2) failed: %s\n", strerror(result));
             con->state = CLOSED;
             FD_CLR(con->socket, &wset);
             close(con->socket);
             nbr_errors++;
-            /** Callback! */
             con->socket = 0;
             break;
           }
           /** we connected! */
-          if (result == 0) {
-            if (tls->ctx->connection_event_cb) {
-              tls->ctx->connection_event_cb(CONN_OPENED, con->socket,
-                  con->this_transportid, tls->ctx->cb_data);
-            }
-            gettimeofday(&t_current, NULL);
-
-            int new_val =
-              timeout->tv_sec*(uint64_t)1000000+timeout->tv_usec
-              - (t_current.tv_sec*(uint64_t)1000000+t_current.tv_usec
-                  - t_previous.tv_sec*(uint64_t)1000000-t_previous.tv_usec);
-
-            memcpy(&t_previous, &t_current, sizeof(t_previous));
-
-            int rtt = t_current.tv_sec*(uint64_t)1000000+t_current.tv_usec
-              - t_initial.tv_sec*(uint64_t)1000000-t_initial.tv_usec;
-
-            int sec = new_val / 1000000;
-            timeout->tv_sec = sec;
-            timeout->tv_usec = new_val - timeout->tv_sec*(uint64_t)1000000;
-
-            sec = rtt / 1000000;
-            /* it is the right con =) */
-            con->connect_time.tv_sec = sec;
-            con->connect_time.tv_usec = rtt - sec*(uint64_t)1000000;
-            con->state = CONNECTED;
-            FD_CLR(con->socket, &wset);
+          else {
+            struct timeval timeout = {.tv_sec = 100, .tv_usec = 0};
+            compute_client_rtt(con, &timeout, &t_initial, &t_previous);
             int flags = fcntl(con->socket, F_GETFL);
             flags &= ~O_NONBLOCK;
             fcntl(con->socket, F_SETFL, flags);
@@ -502,8 +478,8 @@ int tcpls_connect(ptls_t *tls, struct sockaddr *src, struct sockaddr *dest,
 
 /**
  * Performs a TLS handshake upon the primary connection. If this handshake is
- * server-side, the server must provide a callback function in the handshake
  * properties tu support multihoming connections. Note that, server side, then
+ * server-side, the server must provide a callback function in the handshake
  * the handshake message might either be the start of a new hanshake, or a
  * JOIN handshake.
  *
@@ -516,20 +492,41 @@ int tcpls_connect(ptls_t *tls, struct sockaddr *src, struct sockaddr *dest,
 int tcpls_handshake(ptls_t *tls, ptls_handshake_properties_t *properties) {
   tcpls_t *tcpls = tls->tcpls;
   ssize_t rret = 1;
+  connect_info_t *con = NULL;
+  struct timeval t_initial, t_previous;
   if (!tcpls)
     return -1;
-  int socket = 0;
-  /** set the handshake socket */
-  if (properties && !socket) {
-    socket = properties->socket;
+  int sock = 0;
+  /** O-RTT handshakes? */
+  if (properties && properties->client.zero_rtt) {
+    con = get_primary_con_info(tcpls);
+    /* returns an error if the connection is already established or connecting*/
+    if (con->state > CLOSED)
+      return -1;
+    if (con->dest)
+      con->socket = socket(AF_INET, SOCK_STREAM, 0);
+    else if (con->dest6)
+      con->socket = socket(AF_INET6, SOCK_STREAM, 0);
+    if (con->src || con->src6) {
+      con->src ? bind(con->socket, (struct sockaddr*) &con->src->addr,
+          sizeof(con->src->addr)) : bind(con->socket, (struct sockaddr *)
+          &con->src6->addr, sizeof(con->src6->addr));
+    }
+    sock = con->socket;
   }
-  if (!tls->is_server && !socket) {
-    connect_info_t *con = get_primary_con_info(tcpls);
+  else if (properties && properties->socket) {
+    sock = properties->socket;
+    con = get_con_info_from_socket(tcpls, sock);
+    if (!con)
+      return -1;
+  }
+  if (!tls->is_server && !sock) {
+    con = get_primary_con_info(tcpls);
     if (!con)
       goto Exit;
-    socket = con->socket;
-    tcpls->initial_socket = socket;
+    sock = con->socket;
   }
+  tcpls->initial_socket = sock;
   int ret;
   ptls_buffer_t sendbuf;
   /** Sends the client hello (or the mpjoin client hello */
@@ -538,9 +535,30 @@ int tcpls_handshake(ptls_t *tls, ptls_handshake_properties_t *properties) {
           properties)) == PTLS_ERROR_IN_PROGRESS || ret == PTLS_ERROR_HANDSHAKE_IS_MPJOIN)) {
     rret = 0;
     while (rret < sendbuf.off) {
-      if ((ret = send(socket, sendbuf.base, sendbuf.off, 0)) < 0) {
-        perror("send(2) failed");
-        goto Exit;
+      if (properties->client.zero_rtt) {
+        con->state = CONNECTING;
+        gettimeofday(&t_initial, NULL);
+        memcpy(&t_previous, &t_initial, sizeof(t_previous));
+        if (con->dest) {
+          if ((ret = sendto(sock, sendbuf.base+rret, sendbuf.off-rret, MSG_FASTOPEN,
+                  (struct sockaddr*) con->dest,  sizeof(con->dest))) < 0) {
+            perror("sendto failed");
+            goto Exit;
+          }
+        }
+        else if (con->dest6) {
+          if ((ret = sendto(sock, sendbuf.base+rret, sendbuf.off-rret, MSG_FASTOPEN,
+                  (struct sockaddr*) con->dest6,  sizeof(con->dest6))) < 0) {
+            perror("sendto failed");
+            goto Exit;
+          }
+        }
+      }
+      else {
+        if ((ret = send(sock, sendbuf.base+rret, sendbuf.off-rret, 0)) < 0) {
+          perror("send(2) failed");
+          goto Exit;
+        }
       }
       rret += ret;
     }
@@ -551,10 +569,26 @@ int tcpls_handshake(ptls_t *tls, ptls_handshake_properties_t *properties) {
       /* we should get the TRANSPORTID_NEW -- NOTE; this is the size should not
        * exceed it */
       uint8_t recvbuf[128];
-      while ((rret = read(socket, recvbuf, sizeof(recvbuf))) == -1 && errno == EINTR)
+      while ((rret = read(sock, recvbuf, sizeof(recvbuf))) == -1 && errno == EINTR)
         ;
       if (rret == 0)
         goto Exit;
+      if (properties->client.zero_rtt) {
+        /*check whether tcp connected */
+        int result;
+        if ((rret = check_con_has_connected(tcpls, con, &result)) < 0) {
+          goto Exit;
+        }
+        else if (result != 0) {
+          perror("TFO failed?");
+          goto Exit;
+        }
+
+        struct timeval timeout = {.tv_sec = 100, .tv_usec = 0};
+        compute_client_rtt(con, &timeout, &t_initial, &t_previous);
+        con->state = CONNECTED;
+      }
+
       /** Decrypt and apply the TRANSPORT_NEW */
       size_t input_off = 0;
       ptls_buffer_t decryptbuf;
@@ -562,7 +596,6 @@ int tcpls_handshake(ptls_t *tls, ptls_handshake_properties_t *properties) {
       size_t consumed;;
       input_off = 0;
       size_t input_size = rret;
-      connect_info_t *con = get_con_info_from_socket(tcpls, socket);
       do {
         consumed = input_size - input_off;
         rret = ptls_receive(tls, &decryptbuf, con->buffrag, recvbuf + input_off, &consumed);
@@ -578,10 +611,21 @@ int tcpls_handshake(ptls_t *tls, ptls_handshake_properties_t *properties) {
   ssize_t roff;
   uint8_t recvbuf[8192];
   do {
-    while ((rret = read(socket, recvbuf, sizeof(recvbuf))) == -1 && errno == EINTR)
+    while ((rret = read(sock, recvbuf, sizeof(recvbuf))) == -1 && errno == EINTR)
       ;
     if (rret == 0)
       goto Exit;
+    if (properties->client.zero_rtt && con->state == CONNECTING) {
+      int result;
+      if ((rret = check_con_has_connected(tcpls, con, &result)) < 0) {
+        goto Exit;
+      }
+      else if (result != 0) {
+        perror("TFO failed?");
+        goto Exit;
+      }
+      con->state = CONNECTED;
+    }
     roff = 0;
     do {
       ptls_buffer_init(&sendbuf, "", 0);
@@ -589,7 +633,7 @@ int tcpls_handshake(ptls_t *tls, ptls_handshake_properties_t *properties) {
       ret = ptls_handshake(tls, &sendbuf, recvbuf + roff, &consumed, properties);
       roff += consumed;
       if ((ret == 0 || ret == PTLS_ERROR_IN_PROGRESS) && sendbuf.off != 0) {
-        if ((rret = send(socket, sendbuf.base, sendbuf.off, 0)) < 0) {
+        if ((rret = send(sock, sendbuf.base, sendbuf.off, 0)) < 0) {
           perror("send(2) failed");
           goto Exit;
         }
@@ -602,10 +646,10 @@ int tcpls_handshake(ptls_t *tls, ptls_handshake_properties_t *properties) {
 Exit:
   /** TODO Make callbacks for the different possible errors*/
   if (rret <= 0) {
-    connect_info_t *con = get_con_info_from_socket(tcpls, socket);
+    connect_info_t *con = get_con_info_from_socket(tcpls, sock);
     con->state = CLOSED;
-    close(socket);
-    tls->ctx->connection_event_cb(CONN_CLOSED, socket, con->this_transportid,
+    close(sock);
+    tls->ctx->connection_event_cb(CONN_CLOSED, sock, con->this_transportid,
         tls->ctx->cb_data);
     con->socket = 0;
   }
@@ -1908,6 +1952,51 @@ static int setlocal_bpf_cc(ptls_t *ptls, const uint8_t *prog, size_t proglen) {
 
 
 /*=====================================utilities======================================*/
+
+static void compute_client_rtt(connect_info_t *con, struct timeval *timeout,
+    struct timeval *t_initial, struct timeval *t_previous) {
+
+  struct timeval t_current;
+  gettimeofday(&t_current, NULL);
+
+  int new_val =
+    timeout->tv_sec*(uint64_t)1000000+timeout->tv_usec
+    - (t_current.tv_sec*(uint64_t)1000000+t_current.tv_usec
+        - t_previous->tv_sec*(uint64_t)1000000-t_previous->tv_usec);
+
+  memcpy(t_previous, &t_current, sizeof(*t_previous));
+
+  int rtt = t_current.tv_sec*(uint64_t)1000000+t_current.tv_usec
+    - t_initial->tv_sec*(uint64_t)1000000-t_initial->tv_usec;
+
+  int sec = new_val / 1000000;
+  timeout->tv_sec = sec;
+  timeout->tv_usec = new_val - timeout->tv_sec*(uint64_t)1000000;
+
+  sec = rtt / 1000000;
+  /* it is the right con =) */
+  con->connect_time.tv_sec = sec;
+  con->connect_time.tv_usec = rtt - sec*(uint64_t)1000000;
+  con->state = CONNECTED;
+}
+
+static int check_con_has_connected(tcpls_t *tcpls, connect_info_t *con, int *result) {
+  socklen_t reslen = sizeof(*result);
+  if (getsockopt(con->socket, SOL_SOCKET, SO_ERROR, result, &reslen) < 0) {
+    return -1;
+  }
+  if (*result != 0) {
+    fprintf(stderr, "Connection failed: %s\n", strerror(*result));
+    return -1;
+  }
+  if (*result == 0) {
+    if (tcpls->tls->ctx->connection_event_cb) {
+      tcpls->tls->ctx->connection_event_cb(CONN_OPENED, con->socket,
+                  con->this_transportid, tcpls->tls->ctx->cb_data);
+    }
+  }
+  return 0;
+}
 
 /**
  * Compute the value IV to use for the next stream.

@@ -310,7 +310,8 @@ static int handle_server_connection(tcpls_t *tcpls) {
 
 static int handle_client_multipath_test(tcpls_t *tcpls, struct cli_data *data) {
   /** handshake*/
-  handle_tcpls_read(tcpls, 0);
+  if (handle_tcpls_read(tcpls, 0) < 0)
+    return -1;
   printf("Handshake done\n");
   fd_set readfds, writefds, exceptfds;
   int has_migrated = 0;
@@ -932,7 +933,7 @@ int main(int argc, char **argv)
   tcpls_options.peer_addrs6 = new_list(39*sizeof(char), 2);
   int family = 0;
 
-  while ((ch = getopt(argc, argv, "46abBC:c:i:Ik:nN:es:SE:K:l:y:vhtd:p:P:z:Z:")) != -1) {
+  while ((ch = getopt(argc, argv, "46abBC:c:i:Ik:nN:es:SE:K:l:y:vhtd:p:P:z:Z:T:")) != -1) {
     switch (ch) {
       case '4':
         family = AF_INET;
@@ -1067,6 +1068,7 @@ int main(int argc, char **argv)
                   fprintf(stderr, "Unknown integration test: %s\n", optarg);
                   exit(1);
                 }
+                break;
 
       case 'h':
                 usage(argv[0]);
