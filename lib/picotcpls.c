@@ -499,7 +499,87 @@ int tcpls_handshake(ptls_t *tls, ptls_handshake_properties_t *properties) {
   int sock = 0;
   /** O-RTT handshakes? */
   if (properties && properties->client.zero_rtt) {
-    con = get_primary_con_info(tcpls);
+    /* tells from ptls_handshake_properties on which address to connect to */
+    if (!properties->client.dest)
+      return -1;
+    
+    connect_info_t coninfo;
+    memset(&coninfo, 0, sizeof(coninfo));
+    coninfo.state = CLOSED;
+    coninfo.this_transportid = tcpls->next_transport_id++;
+    coninfo.buffrag = malloc(sizeof(ptls_buffer_t));
+    memset(coninfo.buffrag, 0, sizeof(ptls_buffer_t));
+    coninfo.sendbuf = malloc(sizeof(ptls_buffer_t));
+    ptls_buffer_init(coninfo.sendbuf, "", 0);
+    if (properties->client.dest->ss_family == AF_INET) {
+      tcpls_v4_addr_t *current = tcpls->v4_addr_llist;
+      while (current) {
+        if (!memcmp((struct sockaddr*)&current->addr,
+              (struct sockaddr*) properties->client.dest, sizeof(struct sockaddr_in))) {
+          coninfo.dest = current;
+          coninfo.is_primary = current->is_primary;
+          break;
+        }
+        current = current->next;
+      }
+      if (!current) {
+        fprintf(stderr, "No addr matching properties->client.dest\n");
+        return -1;
+      }
+      /* if we want to force a src */
+      if (properties->client.src) {
+        tcpls_v4_addr_t *current = tcpls->ours_v4_addr_llist;
+        while (current) {
+          if (!memcmp((struct sockaddr*)&current->addr,
+                (struct sockaddr*) properties->client.src, sizeof(struct sockaddr_in))) {
+            coninfo.src = current;
+            coninfo.is_primary = current->is_primary;
+            break;
+          }
+          current = current->next;
+        }
+        if (!current) {
+          fprintf(stderr, "No addr matching properties->client.src\n");
+          return -1;
+        }
+      }
+    }
+    else if (properties->client.dest->ss_family == AF_INET6) {
+      tcpls_v6_addr_t *current = tcpls->v6_addr_llist;
+      while (current) {
+        if (!memcmp((struct sockaddr*)&current->addr,
+              (struct sockaddr*) properties->client.dest, sizeof(struct sockaddr_in6))) {
+          coninfo.dest6 = current;
+          coninfo.is_primary = current->is_primary;
+          break;
+        }
+        current = current->next;
+      }
+      if (!current) {
+        fprintf(stderr, "No addr matching properties->client.dest\n");
+        return -1;
+      }
+      /* if we want to force a src */
+      if (properties->client.src) {
+        tcpls_v6_addr_t *current = tcpls->ours_v6_addr_llist;
+        while (current) {
+          if (!memcmp((struct sockaddr*)&current->addr,
+                (struct sockaddr*) properties->client.src, sizeof(struct sockaddr_in6))) {
+            coninfo.src6 = current;
+            coninfo.is_primary = current->is_primary;
+            break;
+          }
+          current = current->next;
+        }
+        if (!current) {
+          fprintf(stderr, "No addr matching properties->client.src\n");
+          return -1;
+        }
+      }
+    }
+    list_add(tcpls->connect_infos, &coninfo);
+    con = list_get(tcpls->connect_infos, tcpls->connect_infos->size-1);
+    assert(con);
     /* returns an error if the connection is already established or connecting*/
     if (con->state > CLOSED)
       return -1;
@@ -541,14 +621,14 @@ int tcpls_handshake(ptls_t *tls, ptls_handshake_properties_t *properties) {
         memcpy(&t_previous, &t_initial, sizeof(t_previous));
         if (con->dest) {
           if ((ret = sendto(sock, sendbuf.base+rret, sendbuf.off-rret, MSG_FASTOPEN,
-                  (struct sockaddr*) con->dest,  sizeof(con->dest))) < 0) {
+                  (struct sockaddr*) &con->dest->addr,  sizeof(con->dest->addr))) < 0) {
             perror("sendto failed");
             goto Exit;
           }
         }
         else if (con->dest6) {
           if ((ret = sendto(sock, sendbuf.base+rret, sendbuf.off-rret, MSG_FASTOPEN,
-                  (struct sockaddr*) con->dest6,  sizeof(con->dest6))) < 0) {
+                  (struct sockaddr*) &con->dest6->addr,  sizeof(con->dest6->addr))) < 0) {
             perror("sendto failed");
             goto Exit;
           }
@@ -617,7 +697,7 @@ int tcpls_handshake(ptls_t *tls, ptls_handshake_properties_t *properties) {
       goto Exit;
     if (properties->client.zero_rtt && con->state == CONNECTING) {
       int result;
-      if ((rret = check_con_has_connected(tcpls, con, &result)) < 0) {
+      if (check_con_has_connected(tcpls, con, &result) < 0) {
         goto Exit;
       }
       else if (result != 0) {
@@ -1953,12 +2033,25 @@ static int setlocal_bpf_cc(ptls_t *ptls, const uint8_t *prog, size_t proglen) {
 
 /*=====================================utilities======================================*/
 
+static struct timeval timediff(struct timeval *t_current, struct timeval *t_init) {
+  struct timeval diff;
+
+  diff.tv_sec = t_current->tv_sec - t_init->tv_sec;
+  diff.tv_usec = t_current->tv_usec - t_init->tv_usec;
+
+  if (diff.tv_usec < 0) {
+    diff.tv_usec += 1000000;
+    diff.tv_sec--;
+  }
+  return diff;
+}
+
 static void compute_client_rtt(connect_info_t *con, struct timeval *timeout,
     struct timeval *t_initial, struct timeval *t_previous) {
 
   struct timeval t_current;
   gettimeofday(&t_current, NULL);
-
+  
   int new_val =
     timeout->tv_sec*(uint64_t)1000000+timeout->tv_usec
     - (t_current.tv_sec*(uint64_t)1000000+t_current.tv_usec
@@ -1966,17 +2059,11 @@ static void compute_client_rtt(connect_info_t *con, struct timeval *timeout,
 
   memcpy(t_previous, &t_current, sizeof(*t_previous));
 
-  int rtt = t_current.tv_sec*(uint64_t)1000000+t_current.tv_usec
-    - t_initial->tv_sec*(uint64_t)1000000-t_initial->tv_usec;
-
   int sec = new_val / 1000000;
   timeout->tv_sec = sec;
   timeout->tv_usec = new_val - timeout->tv_sec*(uint64_t)1000000;
 
-  sec = rtt / 1000000;
-  /* it is the right con =) */
-  con->connect_time.tv_sec = sec;
-  con->connect_time.tv_usec = rtt - sec*(uint64_t)1000000;
+  con->connect_time = timediff(&t_current, t_initial);
   con->state = CONNECTED;
 }
 

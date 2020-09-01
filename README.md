@@ -19,9 +19,13 @@ Picotcpls is a fork of [picotls](https://github.com/h2o/picotls), a  [TLS 1.3 (R
     * Essentially any TCP socket option (a few are supported so far)
   * A wrapper to handle network connections
   * QUIC-like streams
-  * A Failover mechanism
+  * 0-RTT TCPLS handshakes
+  * Application-level Connection Migration (simplistic API code flow to
+    trigger a migration)
+  * Multipath
+  * (ongoing: A Failover mechanism; a kind of automatic connection
+    migration in case of network failure)
   * (ongoing: Authenticated connection closing)
-  * (ongoing: multipathing)
 
 
 picotcpls is a research-level implementation of TCPLS, a novel
@@ -29,7 +33,7 @@ cross-layer extensibility mechanism for TCP designed to offer a
 fine-grained control of the transport protocol to the application layer.
 The mere existence of this research comes from several observations:
 
-* TLS is now massively deployed, and we should not expect unsecure TCP
+* Since Let's Encrypt's success, TLS is now massively deployed, and we should not expect unsecure TCP
   connections to occur over untrusted networks anymore.
 * TCP suffers from severe extensibility issues caused by middlebox
   interferences, lack of space in its header and the difficulty to
@@ -47,7 +51,10 @@ The goal of TCPLS is threefold:
 * Showing the quest for maximum Web performance with QUIC can be matched by
   TCPLS, or even improved under several metrics.
 
-/!\ There are many bugs left, and the API may evolve over time 
+/!\ There are probably bugs left, and the API may evolve over time. Use
+it for fun and experiments /!\
+
+/!\ The current implementation is cryptographically unsecure (IV derivation bug remains to be fixed; not a priortiy tho) /!\
 
 Like picotls, the implementation of picotcpls is licensed under the MIT license.
 
@@ -233,7 +240,6 @@ A set of handshake properties can be configured, which influences the
 behaviour of `tcpls_handshake()` such as connecting in 0-RTT TCP+TLS,
 connecting in 0-RTT in TLS only, joining an existing connection, etc.
 
-TODO
 
 ### Adding / closing streams
 
