@@ -203,7 +203,7 @@ this function waits until the handshake is complete or an error occured.
 It may also triggers various callbacks depending on events occuring in
 the handshake.
 
-properties defines handshake configurations that the client and server
+`properties` defines handshake configurations that the client and server
 can configure to modify the TCPLS handshake, such as the connection in
 which the handshake takes place (in case of multiple connections).
 
@@ -211,7 +211,7 @@ In case of multiple connections (using multiple addresses), a first
 complete handshake must have occured over a chosen connection configured
 with the properties. Note, if `properties == NULL` then the handshake is
 performed over the primary connection. Then, to be able to use the other
-connected addresses, you must perform a MPJOIN TCPLS handshake by
+connected addresses, you must perform a JOIN TCPLS handshake by
 configuring the appropriate connection id within the properties and set
 `proprties->client.mpjoin = 1`, and then call `tcpls_handshake()` for
 each of the desired connection id.
@@ -224,21 +224,26 @@ socket, uint8_t *connid, uint8_t *cookie)`
 `properties->received_mpjoin_to_process = &my_function;`
 
 TCPLS will pass the connid of the TCPLS session corresponding to the
-received MPJOIN, alongside the received one-time cookie and the socket
+received JOIN, alongside the received one-time cookie and the socket
 in which this MPJOIN handshake was received. In this case
 tcpls_handshake() will return PTLS_ERROR_HANDSHAKE_IS_MPJOIN to indicate
 the server that this handshake wasn't from a new client. The server can
-the call `tcpls_accept(tcpls_t *tcpls, int socket, uint8_t
+then call `tcpls_accept(tcpls_t *tcpls, int socket, uint8_t
 *cookie, unint32_t transportid)` assuming it stored a mapping between connid and tcpls_t*. This
 function would properly link the TCP connection to the given tcpls
 session if the cookie is valid.
-
 
 #### Handshake properties
 
 A set of handshake properties can be configured, which influences the
 behaviour of `tcpls_handshake()` such as connecting in 0-RTT TCP+TLS,
 connecting in 0-RTT in TLS only, joining an existing connection, etc.
+
+#### TCPLS 0-RTT
+
+`properties->client.zero_rtt` must be set to 1 prior to calling
+`tcpls_handshake`. Besides, no connection should have been already established
+over the link in which the tcpls handshake is about to take place.
 
 
 ### Adding / closing streams
@@ -262,16 +267,72 @@ Then, TCPLS would close the underlying transport connection when no
 streams are attached anymore. When calling
 
 `tcpls_stream_close(tcpls_t *tls, streamid_t streamid, int sendnow)`,
-tcpls would try to detach and close the stream streamid, and eventually
-close the TCP connection if no stream are attached anymore.
+
+To close the stream, 2 control messages are exchanged: a STREAM_CLOSE is
+sent to the peer, which answers with a STREAM_CLOSE_ACK. When received
+the STREAM_CLOSE_ACK, TCPLS eventually also close the TCP connection if
+no other streams are attached. Callbacks for a STREAM_CLOSE are
+triggered when the stream is dettached (when it is ACKED, or when the
+STREAM_CLOSE is received).
+
+Note: might be better to trigger the callback when the STREAM_CLOSE is sent,
+and not when the STREAM_CLOSE_ACK is received. We cannot write any more
+message on it anyway.
+
+#### Multipath
+
+Multipath can be seamlessly enabled by opening streams on different destinations
+of the same TCPLS connection. Sending over the different streams would
+make the TCPLS aggregates the bandwith of the different TCP connection,
+assuming the internal reordering buffer does not reach its size limit
+(currently unspecified).
+
+The current implementation logic is to make the sender multipath aware,
+and the receiver passive. That is, the only control the receiver has on
+the multipath notion is from the scheduler used when calling
+`tcpls_receive`. This scheduler can be set by the receiver TODO
 
 
 ### Sending / receiving data
 
-TCPLS gives a simple `tcpls_send` and `tcpls_receive` interface
-TODO
+TCPLS gives a simple `tcpls_send` and `tcpls_receive` interface to
+exchange data.
+
+#### Sending data
+
+`size_t tcpls_send(tcpls_t *tcpls, streamid_t streamid, const void *input,
+size_t nbytes)`
+
+returns the number of bytes sent (counting the TLS overhead).
+
+#### Receiving data
+
+`int tcpls_receive(ptls_t *tls, ptls_buffer_t *decryptbuf, size_t
+nbytes, struct timeval *tv)`
+
+returns either TCPLS_HOLD_DATA_TO_READ,
+TCPLS_HOLD_OUT_OF_ORDER_DATA_TO_READ, TCPLS_OK or -1
+
+TCPLS_HOLD_DATA_TO_READ means that there is more than nbytes directly
+available. TCPLS_HOLD_OUT_OF_ORDER_DATA_TO_READ means that TCPLS hold
+some out of order data that we expect eventually be available to read.
+TCPLS_OK means that we have nothing more left.  
+
+All read data (at most nbytes at each call) is put within decryptbuf.
+The current number of bytes within the buffer can be reach with
+`decryptbuf->off`, and the pointer to the first byte is at
+`decryptbuf->base`.
+
+`tv` is a timeout which tells tcpls_receive how much time it must wait
+at most for a read() sys call. Setting NULL tells tcpls not to wait.
 
 ### Handling events
+
+Several callbacks might be configured for events such as:
+
+* STREAM_OPEN, STREAM_CLOSE
+* CONN_OPEN, CONN_CLOSE
+* JOIN
 
 TODO
 
