@@ -299,10 +299,10 @@ static int handle_tcpls_write(tcpls_t *tcpls, struct conn_to_tcpls *conntotcpls,
     ;
   if (ioret > 0) {
     if((ret = tcpls_send(tcpls->tls, conntotcpls->streamid, buf, ioret)) < 0) {
-      fprintf(stderr, "tcpls_send returned %d\n for sending on streamid %u\n",
+      fprintf(stderr, "tcpls_send returned %d for sending on streamid %u\n",
           ret, conntotcpls->streamid);
-      close(inputfd);
-      inputfd = -1;
+      /*close(inputfd);*/
+      /*inputfd = -1;*/
       return -1;
     }
     if (ret < ioret) {
@@ -313,9 +313,13 @@ static int handle_tcpls_write(tcpls_t *tcpls, struct conn_to_tcpls *conntotcpls,
     fprintf(stderr, "End-of-file, closing the connection linked to stream id\
         %u\n", conntotcpls->streamid);
     conntotcpls->wants_to_write = 0;
-    return 0;
-    /*close(inputfd);*/
-    /*inputfd = -1;*/
+    return -2;
+    close(inputfd);
+    inputfd = -1;
+  }
+  else {
+    perror("read failed");
+    return -2;
   }
   /** continue */
   return 1;
@@ -335,7 +339,8 @@ static int handle_server_zero_rtt_test(list_t *conn_tcpls, fd_set *readset) {
   return ret;
 }
 
-static int handle_server_multipath_test(list_t *conn_tcpls, int inputfd, fd_set *readset, fd_set *writeset) {
+static int handle_server_multipath_test(list_t *conn_tcpls, int inputfd, fd_set
+    *readset, fd_set *writeset) {
   /** Now Read data for all tcpls_t * that wants to read */
   int ret = 1;
   for (int i = 0; i < conn_tcpls->size; i++) {
@@ -761,7 +766,8 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
     *sa_peers, int nbr_ours, int nbr_peers, ptls_context_t *ctx, const char *input_file,
     ptls_handshake_properties_t *hsprop, int request_key_update, integration_test_t test)
 {
-  int conn_fd, inputfd, on = 1;
+  int conn_fd, on = 1;
+  int inputfd = 0;
   int listenfd[nbr_ours];
   list_t *conn_tcpls = new_list(sizeof(struct conn_to_tcpls), 2);
   ctx->connection_event_cb = &handle_connection_event;
@@ -879,7 +885,7 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
             fprintf(stderr, "failed to open file:%s:%s\n", input_file, strerror(errno));
             goto Exit;
           }
-          if ((ret = handle_server_multipath_test(conn_tcpls, inputfd,  &readset, &writeset)) < 0) {
+          if ((ret = handle_server_multipath_test(conn_tcpls, inputfd,  &readset, &writeset)) < -1) {
             goto Exit;
           }
           break;
