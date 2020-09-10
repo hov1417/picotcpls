@@ -336,6 +336,11 @@ Several callbacks might be configured for events such as:
 
 TODO
 
+Code examples
+---
+
+TODO
+
 Using the cli command
 ---
 

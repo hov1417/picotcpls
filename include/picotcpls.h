@@ -29,12 +29,19 @@
 #define COOKIE_LEN 16
 #define CONNID_LEN 16
 
+#define SENDING_ACKS_RECORDS_WINDOW 16
+
+// MAX_ENCRYPTED_RECORD_SIZE * 16
+#define SENDING_ACKS_BYTES_WINDOW 266240
+
 /** TCP options we would support in the TLS context */
 typedef enum tcpls_enum_t {
   BPF_CC,
   CONNID,
   COOKIE,
+  DATA_ACK,
   FAILOVER,
+  FAILOVER_END,
   MPJOIN,
   MULTIHOMING_v6,
   MULTIHOMING_v4,
@@ -87,10 +94,21 @@ typedef struct st_connect_info_t {
   /** Fragmentation buffer for TCPLS control records received over this socket
    * */
   ptls_buffer_t *buffrag;
-  
+
   /* Per connection sending buffer */
   ptls_buffer_t *sendbuf;
-  
+
+  /* Used for retaining records that have not been acknowledged yet */
+  tcpls_record_fifo_t *send_queue;
+  /** Last seq number received */
+  uint32_t last_seq_received;
+  /** Tells for which transport id conn we are actually recovering data */
+  uint32_t received_recovering_for;
+  /** nbr bytes received since the last ackknowledgment sent */
+  uint32_t nbr_bytes_received;
+  /** nbr records received on this con since the last ack sent */
+  uint32_t nbr_records_received;
+  /** for sending buffer */
   int send_start;
   /** end positio of the stream control event message in the current sending
    * buffer*/
@@ -114,11 +132,7 @@ typedef struct st_connect_info_t {
 } connect_info_t;
 
 typedef struct st_tcpls_stream {
-  /** Buffer for potentially lost records in case of failover, loss of
-   * connection. Also potentially used for fair usage of the link w.r.t multiple
-   * streams
-   **/
-  tcpls_record_fifo_t *send_queue;
+  
   streamid_t streamid;
   /* Per stream fragmentation buffer -- temporaly removed */
   //ptls_buffer_t *streambuffrag;
@@ -187,7 +201,18 @@ struct st_tcpls_t {
   /** Our addresses */
   tcpls_v4_addr_t *ours_v4_addr_llist;
   tcpls_v6_addr_t *ours_v6_addr_llist;
-
+  
+  /** 
+   *  enable failover; used for rst resistance in case of 
+   *  network outage .. If multiple connections are available
+   *  This is costly since it also enable ACKs at the TCPLS layer, and
+   *  bufferization of the data sent 
+   *  */
+  unsigned int enable_failover : 1;
+  /** Are we recovering from a network failure? */
+  unsigned int failover_recovering : 1;
+  /* tells ptls_send on which con we expect to send encrypted bytes*/
+  connect_info_t *sending_con;
   /** carry a list of tcpls_option_t */
   list_t *tcpls_options;
   /** Should contain all streams */
@@ -212,14 +237,15 @@ struct st_tcpls_t {
   uint32_t next_transport_id;
   /** count the number of times we attached a stream from the peer*/
   uint32_t nbr_of_peer_streams_attached;
-  
   /** nbr of tcp connection */
   uint32_t nbr_tcp_streams;
-
   /** socket of the primary address - must be update at each primary change*/
   int socket_primary;
   /** remember on which socket we pulled out bytes */
   int socket_rcv;
+  /** remember on which stream we are decrypting -- useful to send back a
+   * DATA_ACK with the right stream*/
+  streamid_t streamid_rcv;
   /** the very initial socket used for the handshake */
   int initial_socket;
   /**

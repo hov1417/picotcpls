@@ -379,7 +379,15 @@ int buffer_push_encrypted_records(ptls_t *tls, ptls_buffer_t *buf, uint8_t type,
 
             buf->off += aead_encrypt(ctx, buf->base + buf->off, src, chunk_size+seq_size,
                 mpseq, type);
-            // push this record within our buffer TODO
+            if (type == PTLS_CONTENT_TYPE_TCPLS_DATA || type == PTLS_CONTENT_TYPE_TCPLS_CONTROL) {
+              if (tls->tcpls->enable_failover && tls->tcpls->sending_con) {
+                // push seq and record size
+                queue_ret_t ret = tcpls_record_queue_push(tls->tcpls->sending_con->send_queue,
+                    mpseq, chunk_size+ctx->algo->tag_size+seq_size+1);
+                if (ret == MEMORY_FULL)
+                  return PTLS_ERROR_NO_MEMORY;
+              }
+            }
         });
         src += chunk_size;
         len -= chunk_size;

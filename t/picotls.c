@@ -1214,7 +1214,12 @@ static void test_sends_varlen_bpf_prog(void)
   tcpls_t *tcpls_server = tcpls_new(ctx_peer, 1);
   client = tcpls_client->tls;
   server = tcpls_server->tls;
-  
+  connect_info_t con;
+  memset(&con, 0, sizeof(con));
+  list_add(tcpls_client->connect_infos, &con);
+  list_add(tcpls_server->connect_infos, &con);
+  tcpls_client->socket_rcv = 0;
+  tcpls_server->socket_rcv = 0;
   ret = ptls_handle_message(client, &cbuf, coffs, 0, NULL, 0, NULL);
   ok(ret == PTLS_ERROR_IN_PROGRESS);
   ret = feed_messages(server, &sbuf, soffs, cbuf.base, coffs, NULL);
@@ -1274,6 +1279,13 @@ static void test_tcpls_mpjoin(void)
 
   client = tcpls_client->tls;
   server = tcpls_server->tls;
+  
+  connect_info_t con;
+  memset(&con, 0, sizeof(con));
+  list_add(tcpls_client->connect_infos, &con);
+  list_add(tcpls_server->connect_infos, &con);
+  tcpls_client->socket_rcv = 0;
+  tcpls_server->socket_rcv = 0;
   
   ret = ptls_handle_message(client, &cbuf, coffs, 0, NULL, 0, NULL);
   
@@ -1344,6 +1356,13 @@ static void test_sends_tcpls_record(void)
   client = tcpls_client->tls;
   server = tcpls_server->tls;
   
+  connect_info_t con;
+  memset(&con, 0, sizeof(con));
+  list_add(tcpls_client->connect_infos, &con);
+  list_add(tcpls_server->connect_infos, &con);
+  tcpls_client->socket_rcv = 0;
+  tcpls_server->socket_rcv = 0;
+
   ret = ptls_handle_message(client, &cbuf, coffs, 0, NULL, 0, NULL);
   
   ok(ret == PTLS_ERROR_IN_PROGRESS);
@@ -1438,6 +1457,13 @@ static void test_server_sends_tcpls_encrypted_extensions(void)
   *ptls_get_data_ptr(client) = &client_secrets;
   server = tcpls_server->tls;
   *ptls_get_data_ptr(server) = &server_secrets;
+ 
+  connect_info_t con;
+  memset(&con, 0, sizeof(con));
+  list_add(tcpls_client->connect_infos, &con);
+  list_add(tcpls_server->connect_infos, &con);
+  tcpls_client->socket_rcv = 0;
+  tcpls_server->socket_rcv = 0;
 
   ret = ptls_set_user_timeout(server, 5, 0, 1, 1);
   ok(ret == 0);
@@ -1501,6 +1527,10 @@ static void test_tcpls_usertimeout(void)
   ctx_peer->support_tcpls_options = 1;
   tcpls_t *tcpls_server = tcpls_new(ctx_peer, 1);
   server = tcpls_server->tls;
+  connect_info_t con;
+  memset(&con, 0, sizeof(con));
+  list_add(tcpls_server->connect_infos, &con);
+  tcpls_server->socket_rcv = 0;
   /** 1 second */
   int ret = ptls_set_user_timeout(server, 1, 0, 1, 1);
   ok(ret == 0);
@@ -1550,7 +1580,7 @@ static void test_tcpls_option_api(void)
   ctx_peer->max_early_data_size = 8192;
 
   saved_ticket = ptls_iovec_init(NULL, 0);
-
+  
 
   ptls_buffer_init(&cbuf, "", 0);
   ptls_buffer_init(&sbuf, "", 0);
@@ -1560,7 +1590,12 @@ static void test_tcpls_option_api(void)
   *ptls_get_data_ptr(client) = &client_secrets;
   server = tcpls_server->tls;
   *ptls_get_data_ptr(server) = &server_secrets;
-  
+  connect_info_t con;
+  memset(&con, 0, sizeof(con));
+  list_add(tcpls_client->connect_infos, &con);
+  list_add(tcpls_server->connect_infos, &con);
+  tcpls_client->socket_rcv = 0;
+  tcpls_server->socket_rcv = 0;
   /* full handshake */
   ret = ptls_handle_message(client, &cbuf, coffs, 0, NULL, 0, NULL);
   ok(ret == PTLS_ERROR_IN_PROGRESS);
@@ -2070,6 +2105,13 @@ static void test_tcpls_addresses(void)
   ptls_buffer_init(&sbuf, "", 0);
   client = tcpls->tls;
   server = tcpls_server->tls;
+  
+  connect_info_t con;
+  memset(&con, 0, sizeof(con));
+  list_add(tcpls->connect_infos, &con);
+  list_add(tcpls_server->connect_infos, &con);
+  tcpls->socket_rcv = 0;
+  tcpls_server->socket_rcv = 0;
 
   ret = ptls_handle_message(client, &cbuf, coffs, 0, NULL, 0, NULL);
   ok(ret == PTLS_ERROR_IN_PROGRESS);
@@ -2155,6 +2197,12 @@ static void test_tcpls_stream_api(void)
   ptls_buffer_init(&sbuf, "", 0);
   client = tcpls->tls;
   server = tcpls_server->tls;
+  connect_info_t con;
+  memset(&con, 0, sizeof(con));
+  list_add(tcpls->connect_infos, &con);
+  list_add(tcpls_server->connect_infos, &con);
+  tcpls->socket_rcv = 0;
+  tcpls_server->socket_rcv = 0;
 
   ret = ptls_handle_message(client, &cbuf, coffs, 0, NULL, 0, NULL);
   ok(ret == PTLS_ERROR_IN_PROGRESS);
@@ -2187,31 +2235,6 @@ static void test_tcpls_stream_api(void)
     input_off += consumed;
   } while (ret == 0 && input_off < input_size);
   ok(ret == 0 || ret == PTLS_ERROR_CONN_NOT_FOUND);
-  /* a stream has been attached */
-  /*ok(tcpls_server->streams->size == 2);*/
-  /*[>* try to encrypt something with a new stream <]*/
-  /*tcpls_stream_t *stream = list_get(tcpls->streams, 1);*/
-  /*assert(stream);*/
-  /*sbuf.off = 0;*/
-  /*cbuf.off = 0;*/
-  /*decbuf.off = 0;*/
-  /*ptls_aead_context_t *remember_cli = client->traffic_protection.enc.aead;*/
-  /*ptls_aead_context_t *remember_serv = server->traffic_protection.dec.aead;*/
-  /*client->traffic_protection.enc.aead = stream->aead_enc;*/
-  /*tcpls_stream_t *stream_s = list_get(tcpls_server->streams, 1);*/
-  /*assert(stream_s);*/
-  /*ok(stream->streamid == stream_s->streamid);*/
-  /*ret = ptls_send(client, &cbuf, "hello", 5);*/
-  /*ok(ret == 0);*/
-  /*consumed = cbuf.off;*/
-  /*server->traffic_protection.dec.aead = stream_s->aead_dec;*/
-  /*ret = ptls_receive(server, &decbuf, cbuf.base, &consumed);*/
-  /*ok(ret == 0);*/
-  /*ok(cbuf.off == consumed);*/
-  /*ok(decbuf.off == 5);*/
-  /*ok(memcmp(decbuf.base, "hello", 5) == 0);*/
-  /*client->traffic_protection.enc.aead = remember_cli;*/
-  /*server->traffic_protection.dec.aead = remember_serv;*/
   ptls_buffer_dispose(&cbuf);
   ptls_buffer_dispose(&sbuf);
   ptls_buffer_dispose(&decbuf);
@@ -2264,14 +2287,16 @@ ok(r_fifo->size == 0);
 ok(r_fifo->max_record_num == 3);
 struct st_ptls_record_t rec;
 memset(&rec, 0, sizeof(rec));
-ok(tcpls_record_queue_push(r_fifo, &rec) == OK);
-ok(tcpls_record_queue_push(r_fifo, &rec) == OK);
-ok(tcpls_record_queue_push(r_fifo, &rec) == OK);
+ok(tcpls_record_queue_push(r_fifo, 0, 10) == OK);
+ok(tcpls_record_queue_push(r_fifo, 1, 10) == OK);
+ok(tcpls_record_queue_seq(r_fifo) == 0);
+ok(tcpls_record_queue_push(r_fifo, 2, 10) == OK);
 ok(r_fifo->front_idx == 0);
 ok(tcpls_record_queue_del(r_fifo, 1) == OK);
+ok(tcpls_record_queue_seq(r_fifo) == 1);
 ok(tcpls_record_queue_del(r_fifo, 2) == OK);
 ok(tcpls_record_queue_del(r_fifo, 1) == EMPTY);
-ok(tcpls_record_queue_push(r_fifo, &rec) == OK);
+ok(tcpls_record_queue_push(r_fifo, 4, 10) == OK);
 ok(tcpls_record_queue_del(r_fifo, 1) == OK);
 ok(r_fifo->front_idx == r_fifo->back_idx);
 tcpls_record_fifo_free(r_fifo);

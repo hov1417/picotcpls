@@ -95,6 +95,9 @@ static int cmp_mpseq(void *mpseq1, void *mpseq2);
 static int check_con_has_connected(tcpls_t *tcpls, connect_info_t *con, int *res);
 static void compute_client_rtt(connect_info_t *con, struct timeval *timeout,
     struct timeval *t_initial, struct timeval *t_previous);
+static void shift_buffer(ptls_buffer_t *buf, size_t delta);
+static void send_ack_if_needed(tcpls_t *tcpls, connect_info_t *con);
+static void free_bytes_in_sending_buffer(connect_info_t *con, uint32_t seqnum);
 /**
  * Create a new TCPLS object
  */
@@ -335,9 +338,9 @@ int tcpls_connect(ptls_t *tls, struct sockaddr *src, struct sockaddr *dest,
           ours_current_v6 = ours_current_v6->next;
       } while (ours_current_v4 || ours_current_v6);
       if (current_v4)
-          current_v4 = current_v4->next;
+        current_v4 = current_v4->next;
       if (current_v6)
-          current_v6 = current_v6->next;
+        current_v6 = current_v6->next;
     }
   }
   else if (src && !dest) {
@@ -502,7 +505,6 @@ int tcpls_handshake(ptls_t *tls, ptls_handshake_properties_t *properties) {
     /* tells from ptls_handshake_properties on which address to connect to */
     if (!properties->client.dest)
       return -1;
-    
     connect_info_t coninfo;
     memset(&coninfo, 0, sizeof(coninfo));
     coninfo.state = CLOSED;
@@ -511,6 +513,9 @@ int tcpls_handshake(ptls_t *tls, ptls_handshake_properties_t *properties) {
     memset(coninfo.buffrag, 0, sizeof(ptls_buffer_t));
     coninfo.sendbuf = malloc(sizeof(ptls_buffer_t));
     ptls_buffer_init(coninfo.sendbuf, "", 0);
+    if (tcpls->enable_failover) {
+      coninfo.send_queue = tcpls_record_queue_new(2000);
+    }
     if (properties->client.dest->ss_family == AF_INET) {
       tcpls_v4_addr_t *current = tcpls->v4_addr_llist;
       while (current) {
@@ -606,13 +611,14 @@ int tcpls_handshake(ptls_t *tls, ptls_handshake_properties_t *properties) {
       goto Exit;
     sock = con->socket;
   }
+  tcpls->sending_con = con;
   tcpls->initial_socket = sock;
   int ret;
   ptls_buffer_t sendbuf;
   /** Sends the client hello (or the mpjoin client hello */
   ptls_buffer_init(&sendbuf, "", 0);
   if (!tls->is_server && ((ret = ptls_handshake(tls, &sendbuf, NULL, NULL,
-          properties)) == PTLS_ERROR_IN_PROGRESS || ret == PTLS_ERROR_HANDSHAKE_IS_MPJOIN)) {
+            properties)) == PTLS_ERROR_IN_PROGRESS || ret == PTLS_ERROR_HANDSHAKE_IS_MPJOIN)) {
     rret = 0;
     while (rret < sendbuf.off) {
       if (properties->client.zero_rtt) {
@@ -676,6 +682,7 @@ int tcpls_handshake(ptls_t *tls, ptls_handshake_properties_t *properties) {
       size_t consumed;;
       input_off = 0;
       size_t input_size = rret;
+      tls->tcpls->socket_rcv = sock;
       do {
         consumed = input_size - input_off;
         rret = ptls_receive(tls, &decryptbuf, con->buffrag, recvbuf + input_off, &consumed);
@@ -706,6 +713,7 @@ int tcpls_handshake(ptls_t *tls, ptls_handshake_properties_t *properties) {
       }
       con->state = CONNECTED;
     }
+    tcpls->socket_rcv = sock;
     roff = 0;
     do {
       ptls_buffer_init(&sendbuf, "", 0);
@@ -778,6 +786,9 @@ int tcpls_accept(tcpls_t *tcpls, int socket, uint8_t *cookie, uint32_t transport
   ptls_buffer_init(newconn.sendbuf, "", 0);
   newconn.this_transportid = tcpls->next_transport_id++;
   newconn.peer_transportid = transportid;
+  if (tcpls->enable_failover)
+    newconn.send_queue = tcpls_record_queue_new(2000);
+
   tcpls->nbr_tcp_streams++;
   if (getsockname(socket, (struct sockaddr *) &ss, &sslen) < 0) {
     perror("getsockname(2) failed");
@@ -904,7 +915,9 @@ streamid_t tcpls_stream_new(ptls_t *tls, struct sockaddr *src, struct sockaddr *
     memset(coninfo.buffrag, 0, sizeof(ptls_buffer_t));
     coninfo.sendbuf = malloc(sizeof(ptls_buffer_t));
     ptls_buffer_init(coninfo.sendbuf, "", 0);
-
+    if (tcpls->enable_failover) {
+      coninfo.send_queue = tcpls_record_queue_new(2000);
+    }
     if (dest->sa_family == AF_INET) {
       /** NULL src means we use the default one */
       coninfo.src = src_addr;
@@ -979,6 +992,7 @@ int tcpls_streams_attach(ptls_t *tls, streamid_t streamid, int sendnow) {
   for (int i = 0; i < tcpls->streams->size; i++) {
     stream = list_get(tcpls->streams, i);
     if (stream->need_sending_attach_event) {
+      tcpls->sending_con = stream->con;
       uint8_t input[8];
       memset(input, 0, 8);
       /** send the stream id to the peer */
@@ -999,8 +1013,12 @@ int tcpls_streams_attach(ptls_t *tls, streamid_t streamid, int sendnow) {
         check_stream_attach_have_been_sent(tcpls, ret);
         /** did we sent everything? =) */
         if (stream->con->sendbuf->off == stream->con->send_start + ret) {
-          stream->con->sendbuf->off = 0;
-          stream->con->send_start = 0;
+          if (!tcpls->enable_failover) {
+            stream->con->sendbuf->off = 0;
+            stream->con->send_start = 0;
+          }
+          else
+            stream->con->send_start = stream->con->sendbuf->off;
           tcpls->check_stream_attach_sent = 0;
         }
         else if (ret+stream->con->send_start < stream->con->sendbuf->off) {
@@ -1016,6 +1034,7 @@ int tcpls_streams_attach(ptls_t *tls, streamid_t streamid, int sendnow) {
 static int stream_close_helper(tcpls_t *tcpls, tcpls_stream_t *stream, int type, int sendnow) {
   uint8_t input[4];
   /** send the stream id to the peer */
+  tcpls->sending_con = stream->con;
   memcpy(input, &stream->streamid, 4);
   /** queue the message in the sending buffer */
   stream_send_control_message(tcpls->tls, stream->con->sendbuf, stream->aead_enc, input, type, 4);
@@ -1090,13 +1109,14 @@ ssize_t tcpls_send(ptls_t *tls, streamid_t streamid, const void *input, size_t n
     // Create a stream with the default context, attached to primary IP
     connect_info_t *con = get_primary_con_info(tcpls);
     assert(con);
-    tcpls->socket_rcv = con->socket;
+    /*tcpls->socket_rcv = con->socket;*/
     stream = stream_new(tls, tcpls->next_stream_id++, con, 1);
     if (tls->ctx->stream_event_cb) {
       tls->ctx->stream_event_cb(tcpls, STREAM_OPENED, stream->streamid, con->this_transportid,
           tls->ctx->cb_data);
     }
     stream->need_sending_attach_event = 0;
+    tcpls->sending_con = stream->con;
 
     uint8_t input[8];
     /** send the stream id to the peer */
@@ -1134,6 +1154,7 @@ ssize_t tcpls_send(ptls_t *tls, streamid_t streamid, const void *input, size_t n
   // get the right  aead context matching the stream id
   // This is done for compabitility with original PTLS's unit tests
   tcpls->tls->traffic_protection.enc.aead = stream->aead_enc;
+  tcpls->sending_con = stream->con;
   ret = ptls_send(tcpls->tls, stream->con->sendbuf, input, nbytes);
   tcpls->tls->traffic_protection.enc.aead = remember_aead;
   switch (ret) {
@@ -1176,8 +1197,12 @@ ssize_t tcpls_send(ptls_t *tls, streamid_t streamid, const void *input, size_t n
   }
   /** did we sent everything? =) */
   if (stream->con->sendbuf->off == stream->con->send_start + ret) {
-    stream->con->sendbuf->off = 0;
-    stream->con->send_start = 0;
+    if (!tcpls->enable_failover) {
+      stream->con->sendbuf->off = 0;
+      stream->con->send_start = 0;
+    }
+    else
+      stream->con->send_start = stream->con->sendbuf->off;
     tcpls->check_stream_attach_sent = 0;
   }
   else if (ret+stream->con->send_start < stream->con->sendbuf->off) {
@@ -1242,6 +1267,15 @@ int tcpls_receive(ptls_t *tls, ptls_buffer_t *decryptbuf, size_t nbytes, struct 
           /** TODO next packets may need discarded? Or send an ack and wait! */
           /*ret = tcpls_receive(tls, buf, nbytes, tv);*/
         }
+        else {
+          /** Do we still have a stream? */
+          int do_we_have_a_stream = count_streams_from_socket(tcpls, con->socket);
+          if (!tls->is_server && tcpls->enable_failover && do_we_have_a_stream &&
+              tcpls->connect_infos->size > 1) {
+            /** Alriight, we need to failover -- Send event back to app as well!*/
+
+          }
+        }
         con->state = CLOSED;
         if (tls->ctx->connection_event_cb) {
           tls->ctx->connection_event_cb(CONN_CLOSED, con->socket,
@@ -1263,6 +1297,7 @@ int tcpls_receive(ptls_t *tls, ptls_buffer_t *decryptbuf, size_t nbytes, struct 
         size_t input_size = ret;
         size_t consumed;
         if (count_streams == 0) {
+          tcpls->streamid_rcv = 0; /** no stream */
           while (input_off < input_size) {
             ptls_aead_context_t *remember_aead = tcpls->tls->traffic_protection.dec.aead;
             do {
@@ -1289,6 +1324,7 @@ int tcpls_receive(ptls_t *tls, ptls_buffer_t *decryptbuf, size_t nbytes, struct 
               if (stream) {
                 tcpls->tls->traffic_protection.dec.aead = stream->aead_dec;
                 buf_to_use = stream->con->buffrag;
+                tcpls->streamid_rcv = stream->streamid;
               }
               input_off = 0;
               input_size = ret;
@@ -1313,6 +1349,8 @@ int tcpls_receive(ptls_t *tls, ptls_buffer_t *decryptbuf, size_t nbytes, struct 
       }
     }
   }
+  /** flush an ack if needed */
+  send_ack_if_needed(tcpls, NULL);
   if (tcpls->fragment_length)
     return TCPLS_HOLD_DATA_TO_READ;
   else if (heap_size(tcpls->priority_q))
@@ -1431,16 +1469,16 @@ int ptls_set_bpf_cc(ptls_t *ptls, const uint8_t *bpf_prog_bytecode, size_t bytec
 /*===================================Internal========================================*/
 
 static int cmp_mpseq(void *mpseq1, void *mpseq2) {
-  
-    register uint32_t key1_v = *((uint32_t*)mpseq1);
-    register uint32_t key2_v = *((uint32_t*)mpseq2);
 
-    // Perform the comparison
-    if (key1_v < key2_v)
-        return -1;
-    else if (key1_v == key2_v)
-        return 0;
-    else return 1;
+  register uint32_t key1_v = *((uint32_t*)mpseq1);
+  register uint32_t key2_v = *((uint32_t*)mpseq2);
+
+  // Perform the comparison
+  if (key1_v < key2_v)
+    return -1;
+  else if (key1_v == key2_v)
+    return 0;
+  else return 1;
 }
 
 /**
@@ -1450,7 +1488,7 @@ static int cmp_mpseq(void *mpseq1, void *mpseq2) {
 static int multipath_merge_buffers(tcpls_t *tcpls, ptls_buffer_t *decryptbuf, int nbytes) {
   // We try to pull bytes from the reordering buffer only if there is something
   // within our priorty queue, and we have > 0 nbytes to get to the application
-  
+
   uint32_t initial_pos = decryptbuf->off;
   int ret;
   if (tcpls->fragment_length > 0) {
@@ -1555,6 +1593,9 @@ static int handle_connect(tcpls_t *tcpls, tcpls_v4_addr_t *src, tcpls_v4_addr_t
     memset(coninfo->buffrag, 0, sizeof(ptls_buffer_t));
     coninfo->sendbuf = malloc(sizeof(ptls_buffer_t));
     ptls_buffer_init(coninfo->sendbuf, "", 0);
+    if (tcpls->enable_failover) {
+      coninfo->send_queue = tcpls_record_queue_new(2000);
+    }
 
     if (afinet == AF_INET) {
       coninfo->src = src;
@@ -1741,6 +1782,10 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
     const uint8_t *input, size_t inputlen) {
   if (!ptls->tcpls->tcpls_options_confirmed)
     return -1;
+  connect_info_t *con = get_con_info_from_socket(ptls->tcpls, ptls->tcpls->socket_rcv);
+  assert(con);
+  con->nbr_records_received++;
+  con->nbr_bytes_received += inputlen;
   switch (type) {
     case CONNID:
       {
@@ -1856,8 +1901,6 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
       break;
     case STREAM_ATTACH:
       {
-        //TODO fix this with sending with network order and receiving with host
-        //order
         streamid_t streamid = *(streamid_t *) input;
         uint32_t transportid = *(uint32_t*) &input[4];
         connect_info_t *con;
@@ -1888,8 +1931,25 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
         return 0;
       }
       break;
+    case DATA_ACK:
+      {
+        uint32_t my_transportid = *(uint32_t *) input;
+        uint32_t seqnum = *(uint32_t *) &input[4];
+        /** Pop the sending fifo list until seqnum */
+        connect_info_t *con;
+        for (int i = 0; i < ptls->tcpls->connect_infos->size; i++) {
+          con = list_get(ptls->tcpls->connect_infos, i);
+          if (con->this_transportid == my_transportid) {
+            free_bytes_in_sending_buffer(con, seqnum);
+            break;
+          }
+        }
+        return 0;
+        break;
+      }
     case FAILOVER:
       {
+        ptls->tcpls->failover_recovering = 1;
         streamid_t streamid = *(streamid_t *)input;
         connect_info_t *con = get_con_info_from_socket(ptls->tcpls, ptls->tcpls->socket_rcv);
         /** move streamid's con to this con */
@@ -1901,6 +1961,11 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
         return 0;
       }
         break;
+    case FAILOVER_END:
+      {
+        ptls->tcpls->failover_recovering = 0;
+        break;
+      }
     case BPF_CC:
       {
         int ret;
@@ -1929,11 +1994,40 @@ int handle_tcpls_data_record(ptls_t *tls, struct st_ptls_record_t *rec)
 {
   tcpls_t *tcpls = tls->tcpls;
   uint32_t mpseq = *(uint32_t*) rec->fragment;
+  connect_info_t *con = get_con_info_from_socket(tcpls, tcpls->socket_rcv);
+  if (tcpls->failover_recovering) {
+    /**
+     * We need to check whether we did not already receive this mpseq over the
+     * lost connection -- i.e., the sender can send data we received but not yet
+     * acked
+     **/
+    connect_info_t *con2;
+    for (int i = 0; i < tcpls->connect_infos->size; i++) {
+      con2 = list_get(tcpls->connect_infos, i);
+      if (con2->this_transportid == con->received_recovering_for) {
+        if (con2->last_seq_received <= mpseq) {
+          // we already received this seq
+          return 1;
+        }
+        break;
+      }
+    }
+    /** If this is a recovery mpseq, and that the current connection
+     * already has received a record with a higher seq num, we do not
+     * update last_seq_received */
+    if (con->last_seq_received < mpseq)
+      con->last_seq_received = mpseq;
+  }
+  else {
+    con->last_seq_received = mpseq;
+  }
   int ret = 0;
+  con->nbr_records_received++;
+  con->nbr_bytes_received += rec->length;
   if (tcpls->next_expected_mpseq == mpseq) {
     // then we push this fragment in the received buffer
     tcpls->next_expected_mpseq++;
-    return 0;
+    ret = 0;
   }
   else {
     // push the record to the reordering buffer, and add it to the priority
@@ -1950,8 +2044,9 @@ int handle_tcpls_data_record(ptls_t *tls, struct st_ptls_record_t *rec)
     uint32_t *buf_position_data = (uint32_t*) malloc(sizeof(uint32_t));
     *buf_position_data = tcpls->rec_reordering->off-rec->length-sizeof(rec->length);
     heap_insert(tcpls->priority_q, (void *)mpseq_ptr, (void*)buf_position_data);
-    return 1;
+    ret = 1;
   }
+  send_ack_if_needed(tcpls, con);
 Exit:
   return ret;
 }
@@ -2033,6 +2128,16 @@ static int setlocal_bpf_cc(ptls_t *ptls, const uint8_t *prog, size_t proglen) {
 
 /*=====================================utilities======================================*/
 
+static void shift_buffer(ptls_buffer_t *buf, size_t delta) {
+  if (delta != 0) {
+    assert(delta <= buf->off);
+    if (delta != buf->off)
+      memmove(buf->base, buf->base + delta, buf->off - delta);
+    buf->off -= delta;
+  }
+}
+
+
 static struct timeval timediff(struct timeval *t_current, struct timeval *t_init) {
   struct timeval diff;
 
@@ -2044,6 +2149,95 @@ static struct timeval timediff(struct timeval *t_current, struct timeval *t_init
     diff.tv_sec--;
   }
   return diff;
+}
+
+/**
+ * Decides whether an ack is needed, depending on :
+ * - failover enabling status
+ * - the number of records we recently received
+ * - the number of bytes we recently received
+ * - the number of round trip exchanges (todo)
+ * - (some timeout fired?) (todo)
+ */
+static int is_ack_needed(tcpls_t *tcpls, connect_info_t *con) {
+  if (!tcpls->enable_failover)
+    return 0;
+  if (con->nbr_records_received > SENDING_ACKS_RECORDS_WINDOW) {
+    return 1;
+  }
+  else if (con->nbr_bytes_received > SENDING_ACKS_BYTES_WINDOW) {
+    return 1;
+  }
+  return 0;
+}
+
+static void send_ack_if_needed__do(tcpls_t *tcpls, connect_info_t *con) {
+  ptls_aead_context_t *ctx = tcpls->tls->traffic_protection.enc.aead;
+  ptls_buffer_t *sendbuf;
+  int transportid = 0;
+  tcpls_stream_t *stream;
+  for (int i = 0; i < tcpls->streams->size; i++) {
+    stream = list_get(tcpls->streams, i);
+    if (stream->con == con) {
+      ctx = stream->aead_enc;
+      sendbuf = stream->con->sendbuf;
+      transportid = stream->con->peer_transportid;
+      break;
+    }
+  }
+  assert(sendbuf);
+  uint8_t input[4+4];
+  memcpy(input, &transportid, 4);
+  memcpy(&input[4], &con->last_seq_received, 4);
+  stream_send_control_message(tcpls->tls, sendbuf, ctx, input, DATA_ACK, 8);
+  int ret;
+  ret = send(stream->con->socket, stream->con->sendbuf->base+stream->con->send_start,
+      stream->con->sendbuf->off-stream->con->send_start, 0);
+  if (ret < 0) {
+    /** Failover? */
+    return;
+  }
+  /** did we sent everything? =) */
+  if (stream->con->sendbuf->off == stream->con->send_start + ret) {
+    if (!tcpls->enable_failover) {
+      stream->con->sendbuf->off = 0;
+      stream->con->send_start = 0;
+    }
+    else
+      stream->con->send_start = stream->con->sendbuf->off;
+  }
+  else if (ret+stream->con->send_start < stream->con->sendbuf->off) {
+    stream->con->send_start += ret;
+  }
+  /** restart control variables */
+  con->nbr_bytes_received = 0;
+  con->nbr_records_received = 0;
+}
+
+static void send_ack_if_needed(tcpls_t *tcpls, connect_info_t *con) {
+  if (!con && tcpls->enable_failover) {
+    for (int i = 0; i < tcpls->connect_infos->size; i++) {
+      con = list_get(tcpls->connect_infos, i);
+      if (con->state == CONNECTED && is_ack_needed(tcpls, con)) {
+          send_ack_if_needed__do(tcpls, con);
+      }
+    }
+  }
+  else {
+    if (is_ack_needed(tcpls, con))
+      send_ack_if_needed__do(tcpls, con);
+  }
+}
+
+static void free_bytes_in_sending_buffer(connect_info_t *con, uint32_t seqnum) {
+  int totlength = 0;
+  uint32_t cur_seq, reclen;
+  while (con->send_queue->size > 0 && tcpls_record_queue_seq(con->send_queue) < seqnum) {
+    tcpls_record_queue_pop(con->send_queue, &cur_seq, &reclen);
+    totlength += reclen;
+  }
+  shift_buffer(con->sendbuf, totlength);
+  con->send_start -= totlength;
 }
 
 static void compute_client_rtt(connect_info_t *con, struct timeval *timeout,
@@ -2188,8 +2382,6 @@ static tcpls_stream_t *stream_new(ptls_t *tls, streamid_t streamid,
   tcpls_stream_t *stream = malloc(sizeof(*stream));
   memset(stream, 0, sizeof(tcpls_stream_t));
   stream->streamid = streamid;
-  /** TODO figure out a good default size for the control flow */
-  /*stream->send_queue = tcpls_record_queue_new(500);*/
 
   stream->con = con;
   stream->stream_usable = 0;
@@ -2269,7 +2461,7 @@ static connect_info_t *get_con_info_from_socket(tcpls_t *tcpls, int socket) {
 
 /**
  * look over the connect_info list and set coninfo to the right connect_info
- */
+7 */
 static int get_con_info_from_addrs(tcpls_t *tcpls, tcpls_v4_addr_t *src,
     tcpls_v4_addr_t *dest, tcpls_v6_addr_t *src6, tcpls_v6_addr_t *dest6,
     connect_info_t **coninfo)
@@ -2383,6 +2575,11 @@ void ptls_tcpls_options_free(tcpls_t *tcpls) {
   tcpls->tcpls_options = NULL;
 }
 
+static void free_heap_key_value(void *key, void *val) {
+  free(key);
+  free(val);
+}
+
 void tcpls_free(tcpls_t *tcpls) {
   if (!tcpls)
     return;
@@ -2392,6 +2589,7 @@ void tcpls_free(tcpls_t *tcpls) {
   free(tcpls->sendbuf);
   free(tcpls->recvbuf);
   free(tcpls->rec_reordering);
+  heap_foreach(tcpls->priority_q, &free_heap_key_value);
   heap_destroy(tcpls->priority_q);
   free(tcpls->priority_q);
   list_free(tcpls->streams);
@@ -2405,6 +2603,9 @@ void tcpls_free(tcpls_t *tcpls) {
     if (con->sendbuf) {
       ptls_buffer_dispose(con->sendbuf);
       free(con->sendbuf);
+    }
+    if (con->send_queue) {
+      tcpls_record_fifo_free(con->send_queue);
     }
   }
   list_free(tcpls->connect_infos);
