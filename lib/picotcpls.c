@@ -98,6 +98,7 @@ static void compute_client_rtt(connect_info_t *con, struct timeval *timeout,
 static void shift_buffer(ptls_buffer_t *buf, size_t delta);
 static void send_ack_if_needed(tcpls_t *tcpls, connect_info_t *con);
 static void free_bytes_in_sending_buffer(connect_info_t *con, uint32_t seqnum);
+static void connection_close(tcpls_t *tcpls, connect_info_t *con);
 /**
  * Create a new TCPLS object
  */
@@ -447,17 +448,13 @@ int tcpls_connect(ptls_t *tls, struct sockaddr *src, struct sockaddr *dest,
         con = list_get(tcpls->connect_infos, i);
         if (con->state == CONNECTING && FD_ISSET(con->socket, &wset)) {
           if (check_con_has_connected(tcpls, con, &result) < 0) {
-            con->state = CLOSED;
-            close(con->socket);
-            con->socket = 0;
+            connection_close(tcpls, con);
             break;
           }
           if (result != 0) {
-            con->state = CLOSED;
             FD_CLR(con->socket, &wset);
-            close(con->socket);
+            connection_close(tcpls, con);
             nbr_errors++;
-            con->socket = 0;
             break;
           }
           /** we connected! */
@@ -505,86 +502,67 @@ int tcpls_handshake(ptls_t *tls, ptls_handshake_properties_t *properties) {
     /* tells from ptls_handshake_properties on which address to connect to */
     if (!properties->client.dest)
       return -1;
-    connect_info_t coninfo;
-    memset(&coninfo, 0, sizeof(coninfo));
-    coninfo.state = CLOSED;
-    coninfo.this_transportid = tcpls->next_transport_id++;
-    coninfo.buffrag = malloc(sizeof(ptls_buffer_t));
-    memset(coninfo.buffrag, 0, sizeof(ptls_buffer_t));
-    coninfo.sendbuf = malloc(sizeof(ptls_buffer_t));
-    ptls_buffer_init(coninfo.sendbuf, "", 0);
-    if (tcpls->enable_failover) {
-      coninfo.send_queue = tcpls_record_queue_new(2000);
-    }
-    if (properties->client.dest->ss_family == AF_INET) {
-      tcpls_v4_addr_t *current = tcpls->v4_addr_llist;
-      while (current) {
-        if (!memcmp((struct sockaddr*)&current->addr,
-              (struct sockaddr*) properties->client.dest, sizeof(struct sockaddr_in))) {
-          coninfo.dest = current;
-          coninfo.is_primary = current->is_primary;
-          break;
-        }
-        current = current->next;
+    int ret;
+    if (properties->client.dest->ss_family == AF_INET)
+      ret = get_con_info_from_addrs(tcpls,
+          get_addr_from_sockaddr(tcpls->ours_v4_addr_llist, (struct sockaddr_in*) properties->client.src),
+          get_addr_from_sockaddr(tcpls->v4_addr_llist, (struct sockaddr_in*) properties->client.dest),
+          NULL, NULL, &con);
+    else
+      ret = get_con_info_from_addrs(tcpls, NULL, NULL,
+        get_addr6_from_sockaddr(tcpls->ours_v6_addr_llist, (struct sockaddr_in6*) properties->client.src),
+        get_addr6_from_sockaddr(tcpls->v6_addr_llist, (struct sockaddr_in6*) properties->client.dest),
+        &con);
+    if (ret) {
+      connect_info_t coninfo;
+      memset(&coninfo, 0, sizeof(coninfo));
+      coninfo.state = CLOSED;
+      coninfo.this_transportid = tcpls->next_transport_id++;
+      coninfo.buffrag = malloc(sizeof(ptls_buffer_t));
+      memset(coninfo.buffrag, 0, sizeof(ptls_buffer_t));
+      coninfo.sendbuf = malloc(sizeof(ptls_buffer_t));
+      if (tcpls->enable_failover) {
+        coninfo.send_queue = tcpls_record_queue_new(2000);
       }
-      if (!current) {
-        fprintf(stderr, "No addr matching properties->client.dest\n");
-        return -1;
-      }
-      /* if we want to force a src */
-      if (properties->client.src) {
-        tcpls_v4_addr_t *current = tcpls->ours_v4_addr_llist;
-        while (current) {
-          if (!memcmp((struct sockaddr*)&current->addr,
-                (struct sockaddr*) properties->client.src, sizeof(struct sockaddr_in))) {
-            coninfo.src = current;
-            coninfo.is_primary = current->is_primary;
-            break;
-          }
-          current = current->next;
-        }
-        if (!current) {
-          fprintf(stderr, "No addr matching properties->client.src\n");
+    
+      if (properties->client.dest->ss_family == AF_INET) {
+        con->dest = get_addr_from_sockaddr(tcpls->v4_addr_llist, (struct
+              sockaddr_in *) properties->client.dest);
+        if (!con->dest) {
+          fprintf(stderr, "No addr matching properties->client.dest\n");
           return -1;
         }
-      }
-    }
-    else if (properties->client.dest->ss_family == AF_INET6) {
-      tcpls_v6_addr_t *current = tcpls->v6_addr_llist;
-      while (current) {
-        if (!memcmp((struct sockaddr*)&current->addr,
-              (struct sockaddr*) properties->client.dest, sizeof(struct sockaddr_in6))) {
-          coninfo.dest6 = current;
-          coninfo.is_primary = current->is_primary;
-          break;
-        }
-        current = current->next;
-      }
-      if (!current) {
-        fprintf(stderr, "No addr matching properties->client.dest\n");
-        return -1;
-      }
       /* if we want to force a src */
-      if (properties->client.src) {
-        tcpls_v6_addr_t *current = tcpls->ours_v6_addr_llist;
-        while (current) {
-          if (!memcmp((struct sockaddr*)&current->addr,
-                (struct sockaddr*) properties->client.src, sizeof(struct sockaddr_in6))) {
-            coninfo.src6 = current;
-            coninfo.is_primary = current->is_primary;
-            break;
+        if (properties->client.src) {
+          con->src = get_addr_from_sockaddr(tcpls->ours_v4_addr_llist, (struct
+                sockaddr_in *) properties->client.dest);
+          if (!con->src) {
+            fprintf(stderr, "No addr matching properties->client.src\n");
+            return -1;
           }
-          current = current->next;
         }
-        if (!current) {
-          fprintf(stderr, "No addr matching properties->client.src\n");
+      }
+      else if (properties->client.dest->ss_family == AF_INET6) {
+        con->dest6 = get_addr6_from_sockaddr(tcpls->v6_addr_llist, (struct
+              sockaddr_in6 *) properties->client.dest);
+        if (!con->dest6) {
+          fprintf(stderr, "No addr matching properties->client.dest\n");
           return -1;
         }
+        /* if we want to force a src */
+        if (properties->client.src) {
+          con->src6 = get_addr6_from_sockaddr(tcpls->v6_addr_llist, (struct
+                sockaddr_in6 *) properties->client.src);
+          if (!con->src6) {
+            fprintf(stderr, "No addr matching properties->client.src\n");
+            return -1;
+          }
+        }
       }
+      list_add(tcpls->connect_infos, &coninfo);
+      con = list_get(tcpls->connect_infos, tcpls->connect_infos->size-1);
+      assert(con);
     }
-    list_add(tcpls->connect_infos, &coninfo);
-    con = list_get(tcpls->connect_infos, tcpls->connect_infos->size-1);
-    assert(con);
     /* returns an error if the connection is already established or connecting*/
     if (con->state > CLOSED)
       return -1;
@@ -612,7 +590,8 @@ int tcpls_handshake(ptls_t *tls, ptls_handshake_properties_t *properties) {
     sock = con->socket;
   }
   tcpls->sending_con = con;
-  tcpls->initial_socket = sock;
+  if (!properties ||(properties && !properties->client.mpjoin))
+    tcpls->initial_socket = sock;
   int ret;
   ptls_buffer_t sendbuf;
   /** Sends the client hello (or the mpjoin client hello */
@@ -621,7 +600,7 @@ int tcpls_handshake(ptls_t *tls, ptls_handshake_properties_t *properties) {
             properties)) == PTLS_ERROR_IN_PROGRESS || ret == PTLS_ERROR_HANDSHAKE_IS_MPJOIN)) {
     rret = 0;
     while (rret < sendbuf.off) {
-      if (properties->client.zero_rtt) {
+      if (properties && properties->client.zero_rtt) {
         con->state = CONNECTING;
         gettimeofday(&t_initial, NULL);
         memcpy(&t_previous, &t_initial, sizeof(t_previous));
@@ -654,7 +633,7 @@ int tcpls_handshake(ptls_t *tls, ptls_handshake_properties_t *properties) {
     if (properties && properties->client.mpjoin) {
       /* we should get the TRANSPORTID_NEW -- NOTE; this is the size should not
        * exceed it */
-      uint8_t recvbuf[128];
+      uint8_t recvbuf[256];
       while ((rret = read(sock, recvbuf, sizeof(recvbuf))) == -1 && errno == EINTR)
         ;
       if (rret == 0)
@@ -662,7 +641,7 @@ int tcpls_handshake(ptls_t *tls, ptls_handshake_properties_t *properties) {
       if (properties->client.zero_rtt) {
         /*check whether tcp connected */
         int result;
-        if ((rret = check_con_has_connected(tcpls, con, &result)) < 0) {
+        if ((ret = check_con_has_connected(tcpls, con, &result)) < 0) {
           goto Exit;
         }
         else if (result != 0) {
@@ -673,6 +652,7 @@ int tcpls_handshake(ptls_t *tls, ptls_handshake_properties_t *properties) {
         struct timeval timeout = {.tv_sec = 100, .tv_usec = 0};
         compute_client_rtt(con, &timeout, &t_initial, &t_previous);
         con->state = CONNECTED;
+        ptls_buffer_init(con->sendbuf, "", 0);
       }
 
       /** Decrypt and apply the TRANSPORT_NEW */
@@ -735,11 +715,7 @@ Exit:
   /** TODO Make callbacks for the different possible errors*/
   if (rret <= 0) {
     connect_info_t *con = get_con_info_from_socket(tcpls, sock);
-    con->state = CLOSED;
-    close(sock);
-    tls->ctx->connection_event_cb(CONN_CLOSED, sock, con->this_transportid,
-        tls->ctx->cb_data);
-    con->socket = 0;
+    connection_close(tcpls, con);
   }
   ptls_buffer_dispose(&sendbuf);
   return -1;
@@ -824,7 +800,7 @@ int tcpls_accept(tcpls_t *tcpls, int socket, uint8_t *cookie, uint32_t transport
    * Send back a control message announcing the transport connection id of
    * this newconnn, and echo back the transport id.
    */
-  if (ptls_handshake_is_complete(tcpls->tls) && cookie) {
+  if (cookie) {
     uint8_t input[4+4];
     memcpy(input, &newconn.this_transportid, 4);
     memcpy(&input[4], &transportid, 4);
@@ -1276,14 +1252,7 @@ int tcpls_receive(ptls_t *tls, ptls_buffer_t *decryptbuf, size_t nbytes, struct 
 
           }
         }
-        con->state = CLOSED;
-        if (tls->ctx->connection_event_cb) {
-          tls->ctx->connection_event_cb(CONN_CLOSED, con->socket,
-              con->this_transportid, tls->ctx->cb_data);
-        }
-        close(con->socket);
-        tcpls->nbr_tcp_streams--;
-        con->socket = 0;
+        connection_close(tcpls, con);
         return ret;
       }
       else {
@@ -1333,7 +1302,6 @@ int tcpls_receive(ptls_t *tls, ptls_buffer_t *decryptbuf, size_t nbytes, struct 
                 rret = ptls_receive(tls, decryptbuf, buf_to_use, input + input_off, &consumed);
                 input_off += consumed;
               } while (rret == 0 && input_off < input_size);
-              
               tcpls->tls->traffic_protection.dec.aead = remember_aead;
               /* check whether we can pull records from our priority queue to
                * reorder */
@@ -1561,6 +1529,8 @@ static void check_stream_attach_have_been_sent(tcpls_t *tcpls, int consumed) {
 }
 
 static tcpls_v4_addr_t *get_addr_from_sockaddr(tcpls_v4_addr_t *llist, struct sockaddr_in *addr) {
+  if (!addr)
+    return NULL;
   tcpls_v4_addr_t *current = llist;
   while (current) {
     if (!memcmp(&current->addr, addr, sizeof(*addr)))
@@ -1571,6 +1541,8 @@ static tcpls_v4_addr_t *get_addr_from_sockaddr(tcpls_v4_addr_t *llist, struct so
 }
 
 static tcpls_v6_addr_t *get_addr6_from_sockaddr(tcpls_v6_addr_t *llist, struct sockaddr_in6 *addr6) {
+  if (!addr6)
+    return NULL;
   tcpls_v6_addr_t *current = llist;
   while (current) {
     if (!memcmp(&current->addr, addr6, sizeof(*addr6)))
@@ -1635,9 +1607,7 @@ static int handle_connect(tcpls_t *tcpls, tcpls_v4_addr_t *src, tcpls_v4_addr_t
     if (afinet == AF_INET) {
       if (connect(coninfo->socket, (struct sockaddr*) &dest->addr,
             sizeof(dest->addr)) < 0 && errno != EINPROGRESS) {
-        coninfo->state = CLOSED;
-        close(coninfo->socket);
-        coninfo->socket = 0;
+        connection_close(tcpls, coninfo);
         return -1;
       }
     }
@@ -1886,16 +1856,15 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
        else if (ptls->ctx->connection_event_cb && type == STREAM_CLOSE_ACK) {
          /** if this is the last stream attached to this */
          if (count_streams_from_socket(ptls->tcpls, stream->con->socket) == 1) {
-           close(stream->con->socket);
-           stream->con->state = CLOSED;
-           ptls->ctx->connection_event_cb(CONN_CLOSED, stream->con->socket,
-               stream->con->this_transportid, ptls->ctx->cb_data);
-           stream->con->socket = 0;
+           connection_close(ptls->tcpls, stream->con);
          }
        }
-       /** Free AEAD contexts */
-       stream_free(stream);
-       list_remove(ptls->tcpls->streams, stream);
+       /**  If another stream is also writing to this socket, we may have data
+        * that needs to fail a first decryption with the current stream */
+       stream->marked_for_close = 1;
+       ptls->tcpls->streams_marked_for_close = 1;
+       /*stream_free(stream);*/
+       /*list_remove(ptls->tcpls->streams, stream);*/
        return 0;
       }
       break;
@@ -2578,6 +2547,16 @@ void ptls_tcpls_options_free(tcpls_t *tcpls) {
 static void free_heap_key_value(void *key, void *val) {
   free(key);
   free(val);
+}
+
+void connection_close(tcpls_t *tcpls, connect_info_t *con) {
+  con->state = CLOSED;
+  close(con->socket);
+  tcpls->tls->ctx->connection_event_cb(CONN_CLOSED, con->socket, con->this_transportid,
+      tcpls->tls->ctx->cb_data);
+  con->socket = 0;
+  tcpls->nbr_tcp_streams--;
+  ptls_buffer_dispose(con->sendbuf);
 }
 
 void tcpls_free(tcpls_t *tcpls) {

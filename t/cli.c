@@ -371,7 +371,7 @@ static int handle_client_multipath_test(tcpls_t *tcpls, struct cli_data *data) {
   printf("Handshake done\n");
   fd_set readfds, writefds, exceptfds;
   int has_migrated = 0;
-  /*int has_remigrated = 0;*/
+  int has_remigrated = 0;
   int received_data = 0;
   int mB_received = 0;
   struct timeval timeout;
@@ -410,34 +410,34 @@ static int handle_client_multipath_test(tcpls_t *tcpls, struct cli_data *data) {
         break;
       }
     }
-    /*if (received_data >= 8000000  && !has_remigrated) {*/
-      /*has_remigrated = 1;*/
+    if (received_data >= 41457280  && !has_remigrated) {
+      has_remigrated = 1;
       /*struct timeval timeout;*/
       /*timeout.tv_sec = 5;*/
       /*timeout.tv_usec = 0;*/
       /*tcpls_connect(tcpls->tls, NULL, (struct sockaddr*) &tcpls->v4_addr_llist->addr, &timeout);*/
       /*int socket = 0;*/
-      /*connect_info_t *con = NULL;*/
-      /*for (int i = 0; i < tcpls->connect_infos->size; i++) {*/
-        /*con = list_get(tcpls->connect_infos, i);*/
-        /*if (con->dest) {*/
-          /*socket = con->socket;*/
-          /*break;*/
-        /*}*/
-      /*}*/
-      /*prop.socket = socket;*/
-      /*prop.client.transportid = con->this_transportid;*/
-      /*prop.client.mpjoin = 1;*/
-      /*tcpls_handshake(tcpls->tls, &prop);*/
+      connect_info_t *con = NULL;
+      for (int i = 0; i < tcpls->connect_infos->size; i++) {
+        con = list_get(tcpls->connect_infos, i);
+        if (con->dest) {
+          break;
+        }
+      }
+      prop.client.transportid = con->this_transportid;
+      prop.client.mpjoin = 1;
+      prop.client.zero_rtt = 1;
+      prop.client.dest = (struct sockaddr_storage *) &tcpls->v4_addr_llist->addr;
+      int ret = tcpls_handshake(tcpls->tls, &prop);
 
-      /*tcpls_stream_new(tcpls->tls, NULL, (struct sockaddr*)*/
-          /*&tcpls->v4_addr_llist->addr);*/
-      /*tcpls_streams_attach(tcpls->tls, 0, 1);*/
-      /*[>* closing the stream id 1 <]*/
-      /*tcpls_stream_close(tcpls->tls, 1, 1);*/
-    /*}*/
+      tcpls_stream_new(tcpls->tls, NULL, (struct sockaddr*)
+          &tcpls->v4_addr_llist->addr);
+      tcpls_streams_attach(tcpls->tls, 0, 1);
+      /** closing the stream id 1 */
+      tcpls_stream_close(tcpls->tls, 1, 1);
+    }
     /** We test a migration */
-    if (received_data >= 31457280 && !has_migrated) {
+    if (received_data >= 21457280 && !has_migrated) {
       has_migrated = 1;
       int socket = 0;
       connect_info_t *con = NULL;
