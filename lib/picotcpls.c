@@ -90,7 +90,7 @@ static int new_stream_derive_aead_context(ptls_t *tls, tcpls_stream_t *stream, i
 static int handle_connect(tcpls_t *tcpls, tcpls_v4_addr_t *src, tcpls_v4_addr_t
     *dest, tcpls_v6_addr_t *src6, tcpls_v6_addr_t *dest6, unsigned short sa_family,
     int *nfds, connect_info_t *coninfo);
-static int multipath_merge_buffers(tcpls_t *tcpls, ptls_buffer_t *decryptbuf, int nbytes);
+static int multipath_merge_buffers(tcpls_t *tcpls, ptls_buffer_t *decryptbuf);
 static int cmp_mpseq(void *mpseq1, void *mpseq2);
 static int check_con_has_connected(tcpls_t *tcpls, connect_info_t *con, int *res);
 static void compute_client_rtt(connect_info_t *con, struct timeval *timeout,
@@ -1062,10 +1062,17 @@ int tcpls_stream_close(ptls_t *tls, streamid_t streamid, int sendnow) {
  *
  * Send through streamid; or to the primary one if streamid = 0
  * Send through the primary; or switch the primary if some problem occurs
+ *
+ * @returns: TCPLS_OK if everything has been passed to the kernel buffer
+ *           TCPLS_HOLD_DATA_TO_SEND if some data still need to be sent
+ *
+ *           or -1 in case of errors:
+ *           TODO be more explicit on the potential errors
+ *
  */
 
 
-ssize_t tcpls_send(ptls_t *tls, streamid_t streamid, const void *input, size_t nbytes) {
+int tcpls_send(ptls_t *tls, streamid_t streamid, const void *input, size_t nbytes) {
   tcpls_t *tcpls = tls->tcpls;
   int ret;
   tcpls_stream_t *stream;
@@ -1141,7 +1148,7 @@ ssize_t tcpls_send(ptls_t *tls, streamid_t streamid, const void *input, size_t n
   }
   /** Send over the socket's stream */
   ret = send(stream->con->socket, stream->con->sendbuf->base+stream->con->send_start,
-      stream->con->sendbuf->off-stream->con->send_start, 0);
+        stream->con->sendbuf->off-stream->con->send_start, 0);
   if (ret < 0) {
     /** The peer reset the connection */
     stream->con->state = CLOSED;
@@ -1180,11 +1187,14 @@ ssize_t tcpls_send(ptls_t *tls, streamid_t streamid, const void *input, size_t n
     else
       stream->con->send_start = stream->con->sendbuf->off;
     tcpls->check_stream_attach_sent = 0;
+    return TCPLS_OK;
   }
   else if (ret+stream->con->send_start < stream->con->sendbuf->off) {
     stream->con->send_start += ret;
+    return TCPLS_HOLD_DATA_TO_SEND;
   }
-  return ret;
+  else
+    return -1;
 }
 
 /**
@@ -1193,27 +1203,13 @@ ssize_t tcpls_send(ptls_t *tls, streamid_t streamid, const void *input, size_t n
  * // TODO adding configurable callbacks for TCPLS events
  */
 
-int tcpls_receive(ptls_t *tls, ptls_buffer_t *decryptbuf, size_t nbytes, struct timeval *tv) {
+int tcpls_receive(ptls_t *tls, ptls_buffer_t *decryptbuf, struct timeval *tv) {
   fd_set rset;
   int ret, selectret;
   tcpls_t *tcpls = tls->tcpls;
   FD_ZERO(&rset);
   connect_info_t *con;
-  int received_data = 0;
   int maxfd = 0;
-  int initialnbytes = nbytes;
-  uint32_t initial_off = decryptbuf->off;
-  // check whether we don't hold application data to deliver
-  nbytes -= multipath_merge_buffers(tcpls, decryptbuf, nbytes);
-  if (!nbytes) {
-    // no need to go further
-    if (tcpls->fragment_length)
-      return TCPLS_HOLD_DATA_TO_READ;
-    else if (heap_size(tcpls->priority_q))
-      return TCPLS_HOLD_OUT_OF_ORDER_DATA_TO_READ;
-    else
-      return TCPLS_OK;
-  }
   for (int i = 0; i < tcpls->connect_infos->size; i++) {
     con = list_get(tcpls->connect_infos, i);
     if (con->state != CLOSED) {
@@ -1227,17 +1223,12 @@ int tcpls_receive(ptls_t *tls, ptls_buffer_t *decryptbuf, size_t nbytes, struct 
     return -1;
   }
   ret = 0;
-  uint8_t input[nbytes];
-  int recvlen, remainder;
-  remainder = nbytes % selectret;
-  recvlen = nbytes/selectret;
-  for (int i =  0; i < tcpls->connect_infos->size && nbytes > 0; i++) {
+  /* Default strategy -- One max record pulled for each connection */
+  uint8_t input[PTLS_MAX_ENCRYPTED_RECORD_SIZE];
+  for (int i =  0; i < tcpls->connect_infos->size; i++) {
     con = list_get(tcpls->connect_infos, i);
     if (FD_ISSET(con->socket, &rset)) {
-      if (initialnbytes == nbytes)
-        ret = recv(con->socket, input, recvlen+remainder, 0);
-      else
-        ret = recv(con->socket, input, recvlen, 0);
+        ret = recv(con->socket, input, PTLS_MAX_ENCRYPTED_RECORD_SIZE, 0);
       if (ret <= 0) {
         if (errno == ECONNRESET) {
           /** TODO next packets may need discarded? Or send an ack and wait! */
@@ -1256,7 +1247,7 @@ int tcpls_receive(ptls_t *tls, ptls_buffer_t *decryptbuf, size_t nbytes, struct 
         return ret;
       }
       else {
-        /* We have stuff to decrypts */
+        /* We have stuff to decrypt */
         tcpls->socket_rcv = con->socket;
         int count_streams = count_streams_from_socket(tcpls, tcpls->socket_rcv);
         /** The first message over the fist connection, server-side, we do not
@@ -1309,19 +1300,16 @@ int tcpls_receive(ptls_t *tls, ptls_buffer_t *decryptbuf, size_t nbytes, struct 
           }
         }
         if (rret != 0) {
-          return ret;
+          return rret;
         }
-        nbytes -= (decryptbuf->off-initial_off-received_data);
-        nbytes -= multipath_merge_buffers(tcpls, decryptbuf, nbytes);
-        received_data += (decryptbuf->off-initial_off-received_data);
+        /* merge rec_reording with decryptbuf if we can */
+        multipath_merge_buffers(tcpls, decryptbuf);
       }
     }
   }
   /** flush an ack if needed */
   send_ack_if_needed(tcpls, NULL);
-  if (tcpls->fragment_length)
-    return TCPLS_HOLD_DATA_TO_READ;
-  else if (heap_size(tcpls->priority_q))
+  if (heap_size(tcpls->priority_q))
     return TCPLS_HOLD_OUT_OF_ORDER_DATA_TO_READ;
   else
     return TCPLS_OK;
@@ -1453,55 +1441,28 @@ static int cmp_mpseq(void *mpseq1, void *mpseq2) {
  *
  */
 
-static int multipath_merge_buffers(tcpls_t *tcpls, ptls_buffer_t *decryptbuf, int nbytes) {
+static int multipath_merge_buffers(tcpls_t *tcpls, ptls_buffer_t *decryptbuf) {
   // We try to pull bytes from the reordering buffer only if there is something
   // within our priorty queue, and we have > 0 nbytes to get to the application
 
   uint32_t initial_pos = decryptbuf->off;
   int ret;
-  if (tcpls->fragment_length > 0) {
-    if (tcpls->fragment_length <= nbytes) {
-      ptls_buffer_pushv(decryptbuf, tcpls->rec_reordering->base+tcpls->fragment_pos, tcpls->fragment_length);
-      nbytes -= tcpls->fragment_length;
-      tcpls->fragment_length = 0;
-      tcpls->fragment_pos = 0;
-    }
-    else {
-      ptls_buffer_pushv(decryptbuf, tcpls->rec_reordering->base+tcpls->fragment_pos, nbytes);
-      tcpls->fragment_length = tcpls->fragment_length-nbytes;
-      tcpls->fragment_pos = tcpls->fragment_pos+nbytes;
-      nbytes = 0;
-    }
-  }
-  if (heap_size(tcpls->priority_q) > 0 && nbytes) {
+  if (heap_size(tcpls->priority_q) > 0) {
     uint32_t *mpseq;
     uint32_t *buf_position_data;
     ret = heap_min(tcpls->priority_q, (void **) &mpseq, (void **)&buf_position_data);
-    while (ret && *mpseq == tcpls->next_expected_mpseq && nbytes) {
+    while (ret && *mpseq == tcpls->next_expected_mpseq) {
       size_t length = *(size_t *) (tcpls->rec_reordering->base+*buf_position_data);
-      if (length <= nbytes) {
-        ptls_buffer_pushv(decryptbuf, tcpls->rec_reordering->base+*buf_position_data+sizeof(size_t), length);
-        nbytes -= length;
-      }
-      else {
-        /** We should retain that we did not read everything within
-         * rec_recording
-         **/
-        ptls_buffer_pushv(decryptbuf, tcpls->rec_reordering->base+*buf_position_data+sizeof(size_t), nbytes);
-        tcpls->fragment_length = length-nbytes;
-        tcpls->fragment_pos = *buf_position_data+nbytes;
-        nbytes = 0;
-      }
+      ptls_buffer_pushv(decryptbuf, tcpls->rec_reordering->base+*buf_position_data+sizeof(size_t), length);
       heap_delmin(tcpls->priority_q, (void**)&mpseq, (void**)&buf_position_data);
       tcpls->next_expected_mpseq++;
       free(mpseq);
       free(buf_position_data);
-      if (nbytes)
-        ret = heap_min(tcpls->priority_q, (void **) &mpseq, (void **) &buf_position_data);
+      ret = heap_min(tcpls->priority_q, (void **) &mpseq, (void **) &buf_position_data);
     }
   }
   /** we have nothing left in the heap and no fragments, we can clean rec_reordering! */
-  if (heap_size(tcpls->priority_q) == 0 && tcpls->fragment_length == 0 && tcpls->rec_reordering->off)
+  if (heap_size(tcpls->priority_q) == 0 && tcpls->rec_reordering->off)
     ptls_buffer_dispose(tcpls->rec_reordering);
   return decryptbuf->off-initial_pos;
 Exit:
@@ -1957,12 +1918,11 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
 /**
  * Handle single tcpls data record
  */
-
-
 int handle_tcpls_data_record(ptls_t *tls, struct st_ptls_record_t *rec)
 {
   tcpls_t *tcpls = tls->tcpls;
-  uint32_t mpseq = *(uint32_t*) rec->fragment;
+  uint32_t mpseq = *(uint32_t *) &rec->fragment[rec->length-sizeof(uint32_t)];
+  rec->length -= sizeof(mpseq);
   connect_info_t *con = get_con_info_from_socket(tcpls, tcpls->socket_rcv);
   if (tcpls->failover_recovering) {
     /**
@@ -2142,9 +2102,9 @@ static int is_ack_needed(tcpls_t *tcpls, connect_info_t *con) {
 
 static void send_ack_if_needed__do(tcpls_t *tcpls, connect_info_t *con) {
   ptls_aead_context_t *ctx = tcpls->tls->traffic_protection.enc.aead;
-  ptls_buffer_t *sendbuf;
+  ptls_buffer_t *sendbuf = NULL;
   int transportid = 0;
-  tcpls_stream_t *stream;
+  tcpls_stream_t *stream = NULL;
   for (int i = 0; i < tcpls->streams->size; i++) {
     stream = list_get(tcpls->streams, i);
     if (stream->con == con) {
@@ -2154,7 +2114,10 @@ static void send_ack_if_needed__do(tcpls_t *tcpls, connect_info_t *con) {
       break;
     }
   }
-  assert(sendbuf);
+  if (!stream || !sendbuf) {
+    fprintf(stderr, "No stream found?\n");
+    return;
+  }
   uint8_t input[4+4];
   memcpy(input, &transportid, 4);
   memcpy(&input[4], &con->last_seq_received, 4);
