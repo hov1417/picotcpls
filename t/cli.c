@@ -999,6 +999,10 @@ static void usage(const char *cmd)
       "  -h                   print this help\n"
       "  -t                   Use tcpls\n"
       "  -T intergration_test Precise which integration test is to be run\n"
+      "  -p v4_address        Peer's v4 IP address\n"
+      "  -P v6_address        Peer's v6 IP address\n"
+      "  -z v4_address        Our v4 IP address (not the default one) \n"
+      "  -Z v6_address        Our v6 IP address (not the default one) \n"
       "\n"
       "Supported named groups: secp256r1"
 #if PTLS_OPENSSL_HAVE_SECP384R1
