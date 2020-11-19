@@ -803,19 +803,22 @@ int tcpls_accept(tcpls_t *tcpls, int socket, uint8_t *cookie, uint32_t transport
     uint8_t input[4+4];
     memcpy(input, &newconn.this_transportid, 4);
     memcpy(&input[4], &transportid, 4);
-    stream_send_control_message(tcpls->tls, tcpls->sendbuf, tcpls->tls->traffic_protection.enc.aead, input, TRANSPORT_NEW, 8);
+    stream_send_control_message(tcpls->tls, newconn.sendbuf, tcpls->tls->traffic_protection.enc.aead, input, TRANSPORT_NEW, 8);
     /*connect_info_t *con = get_primary_con_info(tcpls);*/
     int ret;
-    ret = send(socket, tcpls->sendbuf->base+tcpls->send_start,
-        tcpls->sendbuf->off-tcpls->send_start, 0);
+    ret = send(socket, newconn.sendbuf->base, newconn.sendbuf->off, 0);
     if (ret < 0) {
       /** TODO?  */
       return -1;
     }
     /* check whether we sent everything */
-    if (tcpls->sendbuf->off == tcpls->send_start + ret) {
-      tcpls->sendbuf->off = 0;
-      tcpls->send_start = 0;
+    if (newconn.sendbuf->off == ret) {
+      /** XXX Control info that we won't put into the reliable delivery in case of
+       * network failure ?*/
+      newconn.sendbuf->off = 0;
+    }
+    else {
+      newconn.send_start += ret;
     }
   }
   else {
@@ -1024,8 +1027,13 @@ static int stream_close_helper(tcpls_t *tcpls, tcpls_stream_t *stream, int type,
     }
     /* check whether we sent everything */
     if (stream->con->sendbuf->off == stream->con->send_start + ret) {
-      stream->con->sendbuf->off = 0;
-      stream->con->send_start = 0;
+      if (!tcpls->enable_failover) {
+        stream->con->sendbuf->off = 0;
+        stream->con->send_start = 0;
+      }
+      else {
+        stream->con->send_start = stream->con->sendbuf->off;
+      }
     }
     else if (ret+stream->con->send_start < stream->con->sendbuf->off) {
       stream->con->send_start += ret;
@@ -1713,7 +1721,7 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
   if (!ptls->tcpls->tcpls_options_confirmed)
     return -1;
   connect_info_t *con = get_con_info_from_socket(ptls->tcpls, ptls->tcpls->socket_rcv);
-  assert(con);
+  /*assert(con);*/
   con->nbr_records_received++;
   con->nbr_bytes_received += inputlen;
   switch (type) {
@@ -1811,10 +1819,14 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
              stream->con->this_transportid, ptls->ctx->cb_data);
 
        if (type == STREAM_CLOSE) {
+         //XXX check whether it has been fully sent; or try to send again if
+         //this is not the case
          stream_close_helper(ptls->tcpls, stream, STREAM_CLOSE_ACK, 1);
        }
        else if (ptls->ctx->connection_event_cb && type == STREAM_CLOSE_ACK) {
          /** if this is the last stream attached to this */
+         // XXX it is possible that the STREAM_CLOSE_ACK has not been fully
+         // sent?
          if (count_streams_from_socket(ptls->tcpls, stream->con->socket) == 1) {
            connection_close(ptls->tcpls, stream->con);
          }
@@ -2106,7 +2118,7 @@ static void send_ack_if_needed__do(tcpls_t *tcpls, connect_info_t *con) {
   tcpls_stream_t *stream = NULL;
   for (int i = 0; i < tcpls->streams->size; i++) {
     stream = list_get(tcpls->streams, i);
-    if (stream->con == con) {
+    if (stream->con == con && stream->stream_usable) {
       ctx = stream->aead_enc;
       sendbuf = stream->con->sendbuf;
       transportid = stream->con->peer_transportid;
@@ -2146,7 +2158,9 @@ static void send_ack_if_needed__do(tcpls_t *tcpls, connect_info_t *con) {
 }
 
 static void send_ack_if_needed(tcpls_t *tcpls, connect_info_t *con) {
-  if (!con && tcpls->enable_failover) {
+  if (!tcpls->enable_failover)
+    return;
+  if (!con) {
     for (int i = 0; i < tcpls->connect_infos->size; i++) {
       con = list_get(tcpls->connect_infos, i);
       if (con->state == CONNECTED && is_ack_needed(tcpls, con)) {
@@ -2155,13 +2169,17 @@ static void send_ack_if_needed(tcpls_t *tcpls, connect_info_t *con) {
     }
   }
   else {
+    if (con->state == CLOSED) {
+      fprintf(stderr, "Trying to send a ack on a closed con?");
+      return;
+    }
     if (is_ack_needed(tcpls, con))
       send_ack_if_needed__do(tcpls, con);
   }
 }
 
 static void free_bytes_in_sending_buffer(connect_info_t *con, uint32_t seqnum) {
-  int totlength = 0;
+  size_t totlength = 0;
   uint32_t cur_seq, reclen;
   while (con->send_queue->size > 0 && tcpls_record_queue_seq(con->send_queue) < seqnum) {
     tcpls_record_queue_pop(con->send_queue, &cur_seq, &reclen);

@@ -54,8 +54,8 @@ queue_ret_t tcpls_record_queue_pop(tcpls_record_fifo_t *fifo, uint32_t *mpseq,
     uint32_t *reclen) {
   if (fifo->size == 0)
     return EMPTY;
-  memcpy(mpseq, &fifo->queue[fifo->back_idx], sizeof(uint32_t));
-  memcpy(reclen, &fifo->queue[fifo->back_idx]+sizeof(uint32_t), sizeof(uint32_t));
+  *mpseq = *(uint32_t *) &fifo->queue[fifo->back_idx];
+  *reclen = *(uint32_t *) &fifo->queue[fifo->back_idx+4];
   return tcpls_record_queue_del(fifo, 1);
 }
 
