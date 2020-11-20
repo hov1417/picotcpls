@@ -56,14 +56,18 @@ typedef enum tcpls_event_t {
   CONN_CLOSED,
   CONN_OPENED,
   STREAM_CLOSED,
-  STREAM_OPENED
+  STREAM_OPENED,
+  /* tells the app that we may have an address to add */
+  ADD_ADDR,
+  /* tells the app that we added an address! */
+  ADDED_ADDR,
+  REMOVE_ADDR
 } tcpls_event_t;
 
 typedef enum tcpls_tcp_state_t {
   CLOSED,
   CONNECTING,
-  CONNECTED,
-  WANTS_WRITE
+  CONNECTED
 } tcpls_tcp_state_t;
 
 struct st_tcpls_options_t {

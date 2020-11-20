@@ -839,6 +839,11 @@ typedef struct st_ptls_log_event_t {
      */
     int (*connection_event_cb)(tcpls_event_t event, int socket, int transportid, void *cb_data);
     /**
+     * A callback used when a new address is received or an existing address is
+     * removed by the peer
+     */
+    int (*address_event_cb)(tcpls_t *tcpls, tcpls_event_t event, struct sockaddr *addr);
+    /**
      * Optional data to be passed to the callback functions
      */
     void *cb_data;

@@ -113,6 +113,24 @@ static struct timeval timediff(struct timeval *t_current, struct timeval *t_init
   }
   return diff;
 }
+
+static int handle_address_event(tcpls_t *tcpls, tcpls_event_t event, struct sockaddr *addr) {
+  switch (event) {
+    case ADDED_ADDR:
+      fprintf(stderr, "Added address\n");
+      return 0;
+    case ADD_ADDR:
+      if (addr->sa_family == AF_INET) {
+        tcpls_add_v4(tcpls->tls, (struct sockaddr_in*) addr, 0, 0, 0);
+      }
+      else
+        tcpls_add_v6(tcpls->tls, (struct sockaddr_in6*) addr, 0, 0, 0);
+    case REMOVE_ADDR:
+    default:
+      return -1;
+  }
+}
+
 /** Simplistic joining procedure for testing */
 static int handle_mpjoin(int socket, uint8_t *connid, uint8_t *cookie, uint32_t
     transportid, void *cbdata) {
@@ -207,7 +225,7 @@ static int handle_connection_event(tcpls_event_t event, int socket, int transpor
   switch (event) {
     case CONN_OPENED:
       {
-        fprintf(stderr, "Received a CONN_OPENED; adding the socket\n");
+        fprintf(stderr, "Received a CONN_OPENED; adding transportid %d to the socket %d\n", transportid, socket);
         struct conn_to_tcpls *ctcpls;
         for (int i = 0; i < conntcpls->size; i++) {
           ctcpls = list_get(conntcpls, i);
@@ -220,7 +238,7 @@ static int handle_connection_event(tcpls_event_t event, int socket, int transpor
       break;
     case CONN_CLOSED:
       {
-        fprintf(stderr, "Received a CONN_CLOSED; removing the socket\n");
+        fprintf(stderr, "Received a CONN_CLOSED; removing the connection linked to  socket %d\n", socket);
         struct conn_to_tcpls *ctcpls;
         for (int i = 0; i < conntcpls->size; i++) {
           ctcpls = list_get(conntcpls, i);
@@ -355,7 +373,9 @@ static int handle_server_multipath_test(list_t *conn_tcpls, int inputfd, fd_set
   /** Write data for all tcpls_t * that wants to write :-) */
   for (int i = 0; i < conn_tcpls->size; i++) {
     struct conn_to_tcpls *conn = list_get(conn_tcpls, i);
-    if (FD_ISSET(conn->conn_fd, writeset)) {
+    /** it is possible that wants_to_write gets updated by the reading bytes
+     * juste before */
+    if (FD_ISSET(conn->conn_fd, writeset) && conn->wants_to_write) {
       /** Figure out the stream to send data */
       ret = handle_tcpls_write(conn->tcpls, conn, inputfd);
     }
@@ -429,11 +449,13 @@ static int handle_client_multipath_test(tcpls_t *tcpls, struct cli_data *data) {
       prop.client.dest = (struct sockaddr_storage *) &tcpls->v4_addr_llist->addr;
       int ret = tcpls_handshake(tcpls->tls, &prop);
       if (!ret) {
-        tcpls_stream_new(tcpls->tls, NULL, (struct sockaddr*)
+        streamid_t streamid = tcpls_stream_new(tcpls->tls, NULL, (struct sockaddr*)
             &tcpls->v4_addr_llist->addr);
-        tcpls_streams_attach(tcpls->tls, 0, 1);
+       if (tcpls_streams_attach(tcpls->tls, 0, 1) < 0)
+         fprintf(stderr, "Failed to attach stream %u\n", streamid);
+       else
         /** closing the stream id 1 */
-        tcpls_stream_close(tcpls->tls, 1, 1);
+         tcpls_stream_close(tcpls->tls, 1, 1);
       }
       else {
         fprintf(stderr, "tcpls_handshake returned %d\n", ret);
@@ -781,6 +803,7 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
   list_t *conn_tcpls = new_list(sizeof(struct conn_to_tcpls), 2);
   ctx->connection_event_cb = &handle_connection_event;
   ctx->stream_event_cb = &handle_stream_event;
+  ctx->address_event_cb = &handle_address_event;
   ctx->cb_data = conn_tcpls;
   socklen_t salen;
   struct timeval timeout;
