@@ -1659,8 +1659,8 @@ static size_t ptls_aead_encrypt_final(ptls_aead_context_t *ctx, void *output);
  * decrypts an AEAD record
  * @return number of bytes emitted to output if successful, or SIZE_MAX if the input is invalid (e.g. broken MAC)
  */
-static size_t ptls_aead_decrypt(ptls_aead_context_t *ctx, void *output, const void *input, size_t inlen, uint64_t seq,
-                                const void *aad, size_t aadlen);
+static size_t ptls_aead_decrypt(ptls_aead_context_t *ctx, void *output, const
+    void *input, size_t inlen, uint64_t seq, const void *aad, size_t aadlen);
 
 
 int buffer_encrypt_record(ptls_t *tls, ptls_buffer_t *buf, size_t rec_start, ptls_aead_context_t *aead);
@@ -1671,8 +1671,9 @@ int buffer_encrypt_record(ptls_t *tls, ptls_buffer_t *buf, size_t rec_start, ptl
         ptls_buffer_push_block((buf), 2, block);                                                                                   \
     } while (0)
 
-int buffer_push_encrypted_records(ptls_t *tls, ptls_buffer_t *buf, uint8_t type, const uint8_t *src, size_t len,
-                                         ptls_aead_context_t *aead);
+int buffer_push_encrypted_records(ptls_t *tls, ptls_buffer_t *buf, uint8_t type,
+    tcpls_enum_t tcpls_message, const uint8_t *src, size_t len,
+    ptls_aead_context_t *aead);
 
 int update_send_key(ptls_t *tls, ptls_buffer_t *_sendbuf, int request_update);
 /**

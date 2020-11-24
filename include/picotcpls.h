@@ -34,8 +34,10 @@
 // MAX_ENCRYPTED_RECORD_SIZE * 16
 #define SENDING_ACKS_BYTES_WINDOW 266240
 
-/** TCP options we would support in the TLS context */
+/** TCPLS messages we would support in the TLS context */
 typedef enum tcpls_enum_t {
+  NONE, // this one is just for plain data
+  CONTROL_VARLEN_BEGIN,
   BPF_CC,
   CONNID,
   COOKIE,
@@ -184,12 +186,6 @@ struct st_tcpls_t {
   ptls_buffer_t *recvbuf;
   /* Record buffer for multipath reordering */
   ptls_buffer_t *rec_reordering;
-  /** If the application asked for less bytes than a full record hold within
-   * the reordering buffer, then we need to save the position of the missing
-   * bytes for delivery at the next tcpls_receive() call */
-  uint32_t fragment_pos;
-  /** length of the saved fragment */
-  uint32_t fragment_length;
   /** A priority queue to handle reording records */
   heap *priority_q;
   /** sending mpseq number */
@@ -199,6 +195,8 @@ struct st_tcpls_t {
   /** Linked List of address to be used for happy eyeball
    * and for failover
    */
+  /* Size of a varlen option set when we receive a CONTROL_VARLEN_BEGIN */
+  uint32_t varlen_opt_size;
   /** Destination addresses */
   tcpls_v4_addr_t *v4_addr_llist;
   tcpls_v6_addr_t *v6_addr_llist;
@@ -206,13 +204,25 @@ struct st_tcpls_t {
   tcpls_v4_addr_t *ours_v4_addr_llist;
   tcpls_v6_addr_t *ours_v6_addr_llist;
   
-  /** 
+  /**
    *  enable failover; used for rst resistance in case of 
    *  network outage .. If multiple connections are available
    *  This is costly since it also enable ACKs at the TCPLS layer, and
    *  bufferization of the data sent 
    *  */
   unsigned int enable_failover : 1;
+  /**
+   * Enable multipath ordering, setting a multipath sequence number in TCPLS data
+   * messages, and within control informations that apply for multipathing
+   * XXX currently, no options are multipath-capable; Eventually every VARLEN
+   * option should become multipath capable.
+   *
+   * Note; not activating multipath still allow to use multiple paths strictly
+   * speaking, but ordering won't be guaranteed between sent received packets
+   * within different paths. That's still useful if the application seperate
+   * application objects per path.
+   */
+  unsigned int enable_multipath: 1;
   /** Are we recovering from a network failure? */
   unsigned int failover_recovering : 1;
   /* tells ptls_send on which con we expect to send encrypted bytes*/
@@ -308,12 +318,17 @@ int ptls_set_failover(ptls_t *ptls, char *address);
 int ptls_set_bpf_scheduler(ptls_t *ptls, const uint8_t *bpf_prog_bytecode,
     size_t bytecodelen, int setlocal, int settopeer);
 
-int ptls_send_tcpoption(ptls_t *tls, ptls_buffer_t *sendbuf, tcpls_enum_t type);
+int tcpls_send_tcpoption(tcpls_t *tcpls, streamid_t streamid, tcpls_enum_t type);
 
 void tcpls_free(tcpls_t *tcpls);
 
 /*============================================================================*/
 /** Internal to picotls */
+
+int get_tcpls_header_size(tcpls_t *tcpls, uint8_t type, tcpls_enum_t message);
+int is_varlen(tcpls_enum_t message);
+
+int is_failover_valid_message(uint8_t type, tcpls_enum_t message);
 
 int handle_tcpls_control(ptls_t *ctx, tcpls_enum_t type,
     const uint8_t *input, size_t len);

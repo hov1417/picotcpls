@@ -1245,10 +1245,10 @@ static void test_sends_varlen_bpf_prog(void)
   ptls_buffer_init(&sbuf, input, 50000);
   ret = ptls_set_bpf_cc(server, input, 50000, 1, 1);
   ok(ret == 0);
-  ret = ptls_send_tcpoption(server, &sbuf, BPF_CC);
+  ret = tcpls_send_tcpoption(tcpls_server, 1, BPF_CC);
   ok(ret == 0);
-  consumed = sbuf.off; 
-  ret = ptls_receive(client, &decbuf, NULL, sbuf.base, &consumed);
+  consumed = tcpls_server->sendbuf->off;
+  ret = ptls_receive(client, &decbuf, NULL, tcpls_server->sendbuf->base, &consumed);
   ok(ret == 0);
   /*ptls_buffer_dispose(&decbuf);*/
   ctx->support_tcpls_options = 0;
@@ -1386,11 +1386,11 @@ static void test_sends_tcpls_record(void)
   
   cbuf.off = 0;
   ptls_buffer_init(&decbuf, "", 0);
-  ret = ptls_send_tcpoption(client, &cbuf, USER_TIMEOUT);
-  consumed = cbuf.off;
+  ret = tcpls_send_tcpoption(tcpls_client, 1, USER_TIMEOUT);
+  consumed = tcpls_client->sendbuf->off;
   ok(ret == 0);
   
-  ret = ptls_receive(server, &decbuf, NULL, cbuf.base, &consumed);
+  ret = ptls_receive(server, &decbuf, NULL, tcpls_client->sendbuf->base, &consumed);
   ok(ret==0);
   decbuf.off = 0;
   cbuf.off = 0;

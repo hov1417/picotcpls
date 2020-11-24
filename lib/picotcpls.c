@@ -65,7 +65,6 @@
 /** Forward declarations */
 static int tcpls_init_context(ptls_t *ptls, const void *data, size_t datalen,
   tcpls_enum_t type, uint8_t setlocal, uint8_t settopeer);
-static int is_varlen(tcpls_enum_t type);
 static int setlocal_usertimeout(ptls_t *ptls, int val);
 static int setlocal_bpf_cc(ptls_t *ptls, const uint8_t *bpf_prog, size_t proglen);
 static void _set_primary(tcpls_t *tcpls);
@@ -1065,12 +1064,20 @@ int tcpls_streams_attach(ptls_t *tls, streamid_t streamid, int sendnow) {
             stream->con->sendbuf->off = 0;
             stream->con->send_start = 0;
           }
-          else
+          else if (is_failover_valid_message(PTLS_CONTENT_TYPE_TCPLS_CONTROL, STREAM_ATTACH))
             stream->con->send_start = stream->con->sendbuf->off;
+          else
+            stream->con->sendbuf->off = stream->con->send_start; //erase it from the sending buffer
           tcpls->check_stream_attach_sent = 0;
         }
         else if (ret+stream->con->send_start < stream->con->sendbuf->off) {
           stream->con->send_start += ret;
+          if (tcpls->enable_failover &&
+              !is_failover_valid_message(PTLS_CONTENT_TYPE_TCPLS_CONTROL,
+                STREAM_ATTACH)) {
+            // XXX we need to flush if from our sending buffer
+
+          }
         }
       }
     }
@@ -1097,18 +1104,25 @@ static int stream_close_helper(tcpls_t *tcpls, tcpls_stream_t *stream, int type,
       fprintf(stderr, "Did not successfully send the STREAM_CLOSE");
       return -1;
     }
+    // XXX Make an utility function
     /* check whether we sent everything */
     if (stream->con->sendbuf->off == stream->con->send_start + ret) {
       if (!tcpls->enable_failover) {
         stream->con->sendbuf->off = 0;
         stream->con->send_start = 0;
       }
-      else {
+      else if (is_failover_valid_message(PTLS_CONTENT_TYPE_TCPLS_CONTROL, STREAM_CLOSE))
         stream->con->send_start = stream->con->sendbuf->off;
+      else {
+        stream->con->sendbuf->off = stream->con->send_start;
       }
     }
     else if (ret+stream->con->send_start < stream->con->sendbuf->off) {
       stream->con->send_start += ret;
+      if (tcpls->enable_failover &&
+          !is_failover_valid_message(PTLS_CONTENT_TYPE_TCPLS_CONTROL, STREAM_CLOSE)) {
+        //XXX we need to flush it from our buffe.
+      }
     }
   }
   else {
@@ -1403,22 +1417,12 @@ for (int i =  0; i < tcpls->connect_infos->size; i++) {
  *
  * This function should be called after the handshake is complete for both party
  * */
-int ptls_send_tcpoption(ptls_t *tls, ptls_buffer_t *sendbuf, tcpls_enum_t type)
+int tcpls_send_tcpoption(tcpls_t *tcpls, streamid_t streamid, tcpls_enum_t type)
 {
-  tcpls_t *tcpls = tls->tcpls;
+  ptls_t *tls = tcpls->tls;
   if(tls->traffic_protection.enc.aead == NULL)
     return -1;
 
-  if (tls->traffic_protection.enc.aead->seq >= 16777216)
-    tls->needs_key_update = 1;
-
-  if (tls->needs_key_update) {
-    int ret;
-    if ((ret = update_send_key(tls, sendbuf, tls->key_update_send_request)) != 0)
-      return ret;
-    tls->needs_key_update = 0;
-    tls->key_update_send_request = 0;
-  }
   /** Get the option */
   tcpls_options_t *option;
   int found = 0;
@@ -1431,26 +1435,46 @@ int ptls_send_tcpoption(ptls_t *tls, ptls_buffer_t *sendbuf, tcpls_enum_t type)
   }
   if (!found)
     return -1;
+  tcpls_stream_t *stream = stream_get(tcpls, streamid);
+  //Use default sendbuf;
+  ptls_buffer_t *buf;
+  ptls_aead_context_t *ctx_to_use;
+  if (!stream) {
+    buf = tcpls->sendbuf;
+    ctx_to_use = tls->traffic_protection.enc.aead;
+  }
+  else {
+    buf = stream->con->sendbuf;
+    ctx_to_use = stream->aead_enc;
+  }
+  if (tls->traffic_protection.enc.aead->seq >= 16777216)
+    tls->needs_key_update = 1;
 
+  if (tls->needs_key_update) {
+    int ret;
+    if ((ret = update_send_key(tls, buf, tls->key_update_send_request)) != 0)
+      return ret;
+    tls->needs_key_update = 0;
+    tls->key_update_send_request = 0;
+  }
   if (option->is_varlen) {
     /** We need to send the size of the option, which we might need to buffer */
     /** 4 bytes for the variable length, 2 bytes for the option value */
-    uint8_t input[option->data->len + sizeof(option->type) + 4];
-    memcpy(input, &option->type, sizeof(option->type));
-    memcpy(input+sizeof(option->type), &option->data->len, 4);
-    memcpy(input+sizeof(option->type)+4, option->data->base, option->data->len);
-    return buffer_push_encrypted_records(tls, sendbuf,
-        PTLS_CONTENT_TYPE_TCPLS_CONTROL, input,
-        option->data->len+sizeof(option->type)+4, tls->traffic_protection.enc.aead);
+
+    uint8_t input[4];
+    /** Send the CONTROL_VARLEN_BEGIN as a single record first */
+    memcpy(input, &option->data->len, 4);
+    stream_send_control_message(tls, buf, ctx_to_use, input, CONTROL_VARLEN_BEGIN, 4);
+    return buffer_push_encrypted_records(tls, buf,
+        PTLS_CONTENT_TYPE_TCPLS_CONTROL, type, option->data->base,
+        option->data->len, ctx_to_use);
   }
   else {
-    uint8_t input[option->data->len + sizeof(option->type)];
-    memcpy(input, &option->type, sizeof(option->type));
-    memcpy(input+sizeof(option->type), option->data->base, option->data->len);
-
-    return buffer_push_encrypted_records(tls, sendbuf,
-        PTLS_CONTENT_TYPE_TCPLS_CONTROL, input,
-        option->data->len+sizeof(option->type), tls->traffic_protection.enc.aead);
+    uint8_t input[option->data->len];
+    memcpy(input, option->data->base, option->data->len);
+    return buffer_push_encrypted_records(tls, buf,
+        PTLS_CONTENT_TYPE_TCPLS_CONTROL, type, input,
+        option->data->len, ctx_to_use);
   }
 }
 
@@ -1700,13 +1724,10 @@ static tcpls_stream_t *stream_helper_new(tcpls_t *tcpls, connect_info_t *con) {
  */
 
 static int stream_send_control_message(ptls_t *tls, ptls_buffer_t *sendbuf, ptls_aead_context_t *aead,
-    const void *inputinfo, tcpls_enum_t tcpls_message, uint32_t message_len) {
-  uint8_t input[message_len+sizeof(tcpls_message)];
-  memcpy(input, &tcpls_message, sizeof(tcpls_message));
-  memcpy(input+sizeof(tcpls_message), inputinfo, message_len);
+    const void *input, tcpls_enum_t tcpls_message, uint32_t message_len) {
   return buffer_push_encrypted_records(tls, sendbuf,
-      PTLS_CONTENT_TYPE_TCPLS_CONTROL, input,
-      message_len+sizeof(tcpls_message), aead);
+      PTLS_CONTENT_TYPE_TCPLS_CONTROL, tcpls_message, input,
+      message_len, aead);
 }
 
 static int  tcpls_init_context(ptls_t *ptls, const void *data, size_t datalen,
@@ -2077,6 +2098,7 @@ Exit:
 
 int handle_tcpls_control_record(ptls_t *tls, struct st_ptls_record_t *rec)
 {
+  tcpls_t *tcpls = tls->tcpls;
   int ret = 0;
   tcpls_enum_t type;
   uint8_t *init_buf = NULL;
@@ -2091,42 +2113,70 @@ int handle_tcpls_control_record(ptls_t *tls, struct st_ptls_record_t *rec)
     memset(tls->tcpls_buf, 0, sizeof(*tls->tcpls_buf));
   }
 
-  type = *(tcpls_enum_t*) rec->fragment;
-  /** Check whether type is a variable len option */
+  type = *(uint32_t *) &rec->fragment[rec->length-sizeof(uint32_t)];
+  rec->length -= sizeof(uint32_t);
+  /**
+   * Check whether type is a variable len option. If this is the case, we may
+   * need to buffer the content before passing it to its handler.
+   **/
   if (is_varlen(type)){
-    /*size_t optsize = ntoh32(rec->fragment+sizeof(type));*/
-    uint32_t optsize = (uint32_t) *(rec->fragment+sizeof(type));
-    if (optsize > PTLS_MAX_PLAINTEXT_RECORD_SIZE-sizeof(type)-4) {
-      /** We need to buffer it */
-      /** Check first if the buffer has been initialized */
-      if (!tls->tcpls_buf->base) {
-        if ((init_buf = malloc(VARSIZE_OPTION_MAX_CHUNK_SIZE)) == NULL) {
-          ret = PTLS_ERROR_NO_MEMORY;
-          goto Exit;
+    /**
+     * This record should come first in the option's bytestream -- that allows
+     * use to know how much data we need to buffer
+     **/
+    if (type == CONTROL_VARLEN_BEGIN) {
+      uint32_t optsize = *(uint32_t *) rec->fragment;
+      tls->tcpls->varlen_opt_size = optsize;
+      if (optsize > PTLS_MAX_PLAINTEXT_RECORD_SIZE-sizeof(type)) {
+        /** We need to buffer it */
+        /** Check first if the buffer has been initialized */
+        if (!tls->tcpls_buf->base) {
+          if ((init_buf = malloc(VARSIZE_OPTION_MAX_CHUNK_SIZE)) == NULL) {
+            ret = PTLS_ERROR_NO_MEMORY;
+            goto Exit;
+          }
+          ptls_buffer_init(tls->tcpls_buf, init_buf, VARSIZE_OPTION_MAX_CHUNK_SIZE);
         }
-        ptls_buffer_init(tls->tcpls_buf, init_buf, VARSIZE_OPTION_MAX_CHUNK_SIZE);
+        return ret;
+      }
+      return PTLS_ALERT_ILLEGAL_PARAMETER;
+    }
+    else {
+      //XXX TODO, add a verification of this invariant
+      /** We should already have parsed a CONTROL_VARLEN_BEGIN record*/
+      connect_info_t *con = get_con_info_from_socket(tcpls, tcpls->socket_rcv);
+      assert(con);
+      if (tcpls->enable_multipath) {
+        //XXX TODO correctly reordering VARLEN options in case of multiple paths
+        uint32_t mpseq = *(uint32_t *) &rec->fragment[rec->length-sizeof(uint32_t)];
+        rec->length -= sizeof(mpseq);
+        con->last_seq_received = mpseq;
+        con->nbr_records_received++;
+        con->nbr_bytes_received += rec->length;
+        //XXX we currently assume the option is sent over only one path; hence
+        //this is always true.
+        if (tcpls->next_expected_mpseq == mpseq) {
+          // then we push this fragment in the received buffer
+          tcpls->next_expected_mpseq++;
+        }
       }
       /** always reserve memory (won't if enough left) */
-      if ((ret = ptls_buffer_reserve(tls->tcpls_buf, rec->length-sizeof(type)-4)) != 0)
+      if ((ret = ptls_buffer_reserve(tls->tcpls_buf, rec->length-sizeof(type))) != 0)
         goto Exit;
-      memcpy(tls->tcpls_buf->base+tls->tcpls_buf->off, rec->fragment+sizeof(type)+4, rec->length-sizeof(type)-4);
-      tls->tcpls_buf->off += rec->length - sizeof(type)-4;
+      memcpy(tls->tcpls_buf->base+tls->tcpls_buf->off, rec->fragment, rec->length);
+      tls->tcpls_buf->off += rec->length;
       if (ret)
         goto Exit;
-      if (tls->tcpls_buf->off == optsize) {
+      if (tls->tcpls_buf->off == tls->tcpls->varlen_opt_size) {
         /** We have all of it */
-        ret = handle_tcpls_control(tls, type, tls->tcpls_buf->base, optsize);
+        ret = handle_tcpls_control(tls, type, tls->tcpls_buf->base, tls->tcpls_buf->off);
         ptls_buffer_dispose(tls->tcpls_buf);
       }
       return ret;
     }
-    else {
-      return handle_tcpls_control(tls, type, rec->fragment+sizeof(type)+4, optsize);
-    }
   }
   /** We assume that only Variable size options won't hold into 1 record */
-  return handle_tcpls_control(tls, type, rec->fragment+sizeof(type), rec->length-sizeof(type));
-
+  return handle_tcpls_control(tls, type, rec->fragment, rec->length);
 Exit:
   ptls_buffer_dispose(tls->tcpls_buf);
   /*free(tls->tcpls_buf);*/
@@ -2145,6 +2195,49 @@ static int setlocal_bpf_cc(ptls_t *ptls, const uint8_t *prog, size_t proglen) {
 
 /*=====================================utilities======================================*/
 
+/**
+ * Compute the tcpls header size depending on the type of message we have to
+ * send or read, and depending on the options enabled
+ */
+
+int get_tcpls_header_size(tcpls_t *tcpls, uint8_t type,  tcpls_enum_t tcpls_message) {
+  if (!tcpls)
+    return 0;
+  int header_size = 0;
+  if (tcpls->enable_multipath){
+    if (type == PTLS_CONTENT_TYPE_TCPLS_DATA || (type ==
+          PTLS_CONTENT_TYPE_TCPLS_CONTROL && is_varlen(tcpls_message)))
+      header_size += 4; // add sequence number
+  }
+  if (type == PTLS_CONTENT_TYPE_TCPLS_CONTROL) {
+    header_size += 4; // contains the control type
+    switch (tcpls_message) {
+      default: break;
+    }
+  }
+  return header_size;
+}
+
+/**
+ * When encrypting bytes, if failover is activated, we need to check whether the
+ * message we send apply for TCPLS reliability in case of network failure.
+ *
+ * That is, such messages are going to be acked.
+ */
+int is_failover_valid_message(uint8_t type, tcpls_enum_t message) {
+  if (type == PTLS_CONTENT_TYPE_TCPLS_DATA)
+    return 1;
+  switch (message) {
+    case NONE:
+    case MULTIHOMING_v6:
+    case MULTIHOMING_v4:
+    case USER_TIMEOUT:
+    case BPF_CC:
+      return 1;
+    default:
+      return 0;
+  }
+}
 
 static void tcpls_housekeeping(tcpls_t *tcpls) {
   /* check whether we have a stream to remove */
@@ -2158,8 +2251,8 @@ static void tcpls_housekeeping(tcpls_t *tcpls) {
     }
     for (int i = 0; i < streams_to_remove->size; i++) {
       stream = stream_get(tcpls, *(streamid_t *) list_get(streams_to_remove, i));
-       stream_free(stream);
-       assert(!list_remove(tcpls->streams, stream));
+      stream_free(stream);
+      assert(!list_remove(tcpls->streams, stream));
     }
     list_free(streams_to_remove);
     tcpls->streams_marked_for_close = 0;
@@ -2228,6 +2321,7 @@ static void send_ack_if_needed__do(tcpls_t *tcpls, connect_info_t *con) {
   uint8_t input[4+4];
   memcpy(input, &transportid, 4);
   memcpy(&input[4], &con->last_seq_received, 4);
+  tcpls->sending_con = con;
   stream_send_control_message(tcpls->tls, sendbuf, ctx, input, DATA_ACK, 8);
   int ret;
   ret = send(stream->con->socket, stream->con->sendbuf->base+stream->con->send_start,
@@ -2238,14 +2332,11 @@ static void send_ack_if_needed__do(tcpls_t *tcpls, connect_info_t *con) {
   }
   /** did we sent everything? =) */
   if (stream->con->sendbuf->off == stream->con->send_start + ret) {
-    if (!tcpls->enable_failover) {
-      stream->con->sendbuf->off = 0;
-      stream->con->send_start = 0;
-    }
-    else
-      stream->con->send_start = stream->con->sendbuf->off;
+    // we erase the ack at the next sending
+    stream->con->sendbuf->off = stream->con->send_start;
   }
   else if (ret+stream->con->send_start < stream->con->sendbuf->off) {
+    //XXX We need to flush the ack =(
     stream->con->send_start += ret;
   }
   /** restart control variables */
@@ -2601,8 +2692,14 @@ static void _set_primary(tcpls_t *tcpls) {
     primary_con->dest6->is_primary = 1;
 }
 
-static int is_varlen(tcpls_enum_t type) {
-  return (type == BPF_CC);
+int is_varlen(tcpls_enum_t type) {
+  switch(type) {
+    case CONTROL_VARLEN_BEGIN:
+    case BPF_CC:
+      return 1;
+    default:
+      return 0;
+  }
 }
 
 void ptls_tcpls_options_free(tcpls_t *tcpls) {
