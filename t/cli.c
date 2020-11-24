@@ -556,6 +556,7 @@ static int handle_client_connection(tcpls_t *tcpls, struct cli_data *data,
         struct timeval timeout;
         timeout.tv_sec = 5;
         timeout.tv_usec = 0;
+        tcpls->enable_multipath = 1;
         int err = tcpls_connect(tcpls->tls, NULL, NULL, &timeout);
         if (err){
           fprintf(stderr, "tcpls_connect failed with err %d\n", err);
@@ -899,6 +900,8 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
             conntcpls.conn_fd = new_conn;
             conntcpls.wants_to_write = 0;
             conntcpls.tcpls = new_tcpls;
+            if (test == T_MULTIPATH)
+              conntcpls.tcpls->enable_multipath =1;
             list_add(tcpls_l, new_tcpls);
             /** ADD our ips  -- This might worth to be ctx and instance-based?*/
             tcpls_add_ips(new_tcpls, sa_ours, NULL, nbr_ours, 0);

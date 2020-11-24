@@ -2030,10 +2030,13 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
 int handle_tcpls_data_record(ptls_t *tls, struct st_ptls_record_t *rec)
 {
   tcpls_t *tcpls = tls->tcpls;
-  uint32_t mpseq = *(uint32_t *) &rec->fragment[rec->length-sizeof(uint32_t)];
-  rec->length -= sizeof(mpseq);
+  uint32_t mpseq;
+  if (tcpls->enable_multipath) {
+    mpseq = *(uint32_t *) &rec->fragment[rec->length-sizeof(uint32_t)];
+    rec->length -= sizeof(mpseq);
+  }
   connect_info_t *con = get_con_info_from_socket(tcpls, tcpls->socket_rcv);
-  if (tcpls->failover_recovering) {
+  if (tcpls->failover_recovering && tcpls->enable_multipath) {
     /**
      * We need to check whether we did not already receive this mpseq over the
      * lost connection -- i.e., the sender can send data we received but not yet
@@ -2056,33 +2059,35 @@ int handle_tcpls_data_record(ptls_t *tls, struct st_ptls_record_t *rec)
     if (con->last_seq_received < mpseq)
       con->last_seq_received = mpseq;
   }
-  else {
+  else if (tcpls->enable_multipath) {
     con->last_seq_received = mpseq;
   }
   int ret = 0;
   con->nbr_records_received++;
   con->nbr_bytes_received += rec->length;
-  if (tcpls->next_expected_mpseq == mpseq) {
-    // then we push this fragment in the received buffer
-    tcpls->next_expected_mpseq++;
-    ret = 0;
-  }
-  else {
-    // push the record to the reordering buffer, and add it to the priority
-    // queue
-    if (tcpls->rec_reordering->base == NULL) {
-      ptls_buffer_init(tcpls->rec_reordering, "", 0);
+  if (tcpls->enable_multipath) {
+    if (tcpls->next_expected_mpseq == mpseq) {
+      // then we push this fragment in the received buffer
+      tcpls->next_expected_mpseq++;
+      ret = 0;
     }
-    uint32_t *mpseq_ptr = (uint32_t*) malloc(sizeof(uint32_t));
-    *mpseq_ptr = mpseq;
-    ptls_buffer_pushv(tcpls->rec_reordering, &rec->length,
-        sizeof(rec->length));
-    ptls_buffer_pushv(tcpls->rec_reordering, rec->fragment, rec->length);
-    /** contains length + payload, point to the length*/
-    uint32_t *buf_position_data = (uint32_t*) malloc(sizeof(uint32_t));
-    *buf_position_data = tcpls->rec_reordering->off-rec->length-sizeof(rec->length);
-    heap_insert(tcpls->priority_q, (void *)mpseq_ptr, (void*)buf_position_data);
+    else {
+      // push the record to the reordering buffer, and add it to the priority
+      // queue
+      if (tcpls->rec_reordering->base == NULL) {
+        ptls_buffer_init(tcpls->rec_reordering, "", 0);
+      }
+      uint32_t *mpseq_ptr = (uint32_t*) malloc(sizeof(uint32_t));
+      *mpseq_ptr = mpseq;
+      ptls_buffer_pushv(tcpls->rec_reordering, &rec->length,
+          sizeof(rec->length));
+      ptls_buffer_pushv(tcpls->rec_reordering, rec->fragment, rec->length);
+      /** contains length + payload, point to the length*/
+      uint32_t *buf_position_data = (uint32_t*) malloc(sizeof(uint32_t));
+      *buf_position_data = tcpls->rec_reordering->off-rec->length-sizeof(rec->length);
+      heap_insert(tcpls->priority_q, (void *)mpseq_ptr, (void*)buf_position_data);
     ret = 1;
+    }
   }
   send_ack_if_needed(tcpls, con);
 Exit:
