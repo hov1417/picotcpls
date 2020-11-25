@@ -97,6 +97,7 @@ struct conn_to_tcpls {
 struct cli_data {
   list_t *socklist;
   list_t *streamlist;
+  list_t *socktoremove;
 };
 
 static struct tcpls_options tcpls_options;
@@ -208,8 +209,8 @@ static int handle_client_connection_event(tcpls_event_t event, int socket, int t
   struct cli_data *data = (struct cli_data*) cbdata;
   switch (event) {
     case CONN_CLOSED:
-      fprintf(stderr, "Received a CONN_CLOSED; removing the socket %d\n", socket);
-      list_remove(data->socklist, &socket);
+      fprintf(stderr, "Received a CONN_CLOSED; marking socket %d to remove\n", socket);
+      list_add(data->socktoremove, &socket);
       break;
     case CONN_OPENED:
       fprintf(stderr, "Received a CONN_OPENED; adding the socket %d\n", socket);
@@ -329,7 +330,7 @@ static int handle_tcpls_write(tcpls_t *tcpls, struct conn_to_tcpls *conntotcpls,
     fprintf(stderr, "End-of-file, closing the connection linked to stream id\
         %u\n", conntotcpls->streamid);
     conntotcpls->wants_to_write = 0;
-    return -2;
+    tcpls_stream_close(tcpls->tls, conntotcpls->streamid, 1);
     close(inputfd);
     inputfd = -1;
   }
@@ -409,12 +410,19 @@ static int handle_client_multipath_test(tcpls_t *tcpls, struct cli_data *data) {
   struct timeval timeout;
   ptls_handshake_properties_t prop = {NULL};
   while (1) {
+    /*cleanup*/
+    int *socket;
+    for (int i = 0; i < data->socktoremove->size; i++) {
+      socket = list_get(data->socktoremove, i);
+      list_remove(data->socklist, socket);
+    }
+    list_clean(data->socktoremove);
+
     int maxfds = 0;
     do {
       FD_ZERO(&readfds);
       FD_ZERO(&writefds);
       FD_ZERO(&exceptfds);
-      int *socket;
       for (int i = 0; i < data->socklist->size; i++) {
         socket = list_get(data->socklist, i);
         FD_SET(*socket, &readfds);
@@ -426,7 +434,6 @@ static int handle_client_multipath_test(tcpls_t *tcpls, struct cli_data *data) {
     } while (select(maxfds+1, &readfds, &writefds, &exceptfds, &timeout) == -1);
 
     int ret;
-    int *socket;
     for (int i = 0; i < data->socklist->size; i++) {
       socket = list_get(data->socklist, i);
       if (FD_ISSET(*socket, &readfds)) {
@@ -915,7 +922,7 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
           else {
             fprintf(stderr, "Accepting a new connection\n");
             tcpls_t *new_tcpls = tcpls_new(ctx,  1);
-            new_tcpls->enable_failover = 0;
+            new_tcpls->enable_failover = 1;
             struct conn_to_tcpls conntcpls;
             memset(&conntcpls, 0, sizeof(conntcpls));
             conntcpls.conn_fd = new_conn;
@@ -985,17 +992,19 @@ static int run_client(struct sockaddr_storage *sa_our, struct sockaddr_storage
 
   hsprop->client.esni_keys = resolve_esni_keys(server_name);
   list_t *socklist = new_list(sizeof(int), 2);
+  list_t *socktoremove = new_list(sizeof(int), 2);
   list_t *streamlist = new_list(sizeof(tcpls_stream_t), 2);
   struct cli_data data = {NULL};
   data.socklist = socklist;
   data.streamlist = streamlist;
+  data.socktoremove = socktoremove;
   ctx->cb_data = &data;
   ctx->stream_event_cb = &handle_client_stream_event;
   ctx->connection_event_cb = &handle_client_connection_event;
   tcpls_t *tcpls = tcpls_new(ctx, 0);
   tcpls_add_ips(tcpls, sa_our, sa_peer, nbr_our, nbr_peer);
   ctx->output_decrypted_tcpls_data = 0;
-  tcpls->enable_failover = 0;
+  tcpls->enable_failover = 1;
 
   if (ctx->support_tcpls_options) {
     int ret = handle_client_connection(tcpls, &data, test);

@@ -1092,24 +1092,8 @@ static int stream_close_helper(tcpls_t *tcpls, tcpls_stream_t *stream, int type,
     }
     // XXX Make an utility function
     /* check whether we sent everything */
-    if (stream->con->sendbuf->off == stream->con->send_start + ret) {
-      if (!tcpls->enable_failover) {
-        stream->con->sendbuf->off = 0;
-        stream->con->send_start = 0;
-      }
-      else if (is_failover_valid_message(PTLS_CONTENT_TYPE_TCPLS_CONTROL, STREAM_CLOSE))
-        stream->con->send_start = stream->con->sendbuf->off;
-      else {
-        stream->con->sendbuf->off = stream->con->send_start;
-      }
-    }
-    else if (ret+stream->con->send_start < stream->con->sendbuf->off) {
-      stream->con->send_start += ret;
-      if (tcpls->enable_failover &&
-          !is_failover_valid_message(PTLS_CONTENT_TYPE_TCPLS_CONTROL, STREAM_CLOSE)) {
-        //XXX we need to flush it from our buffe.
-      }
-    }
+    if (!did_we_sent_everything(tcpls, stream, ret, PTLS_CONTENT_TYPE_TCPLS_CONTROL, STREAM_CLOSE))
+      return -1;
   }
   else {
     stream->marked_for_close = 1;

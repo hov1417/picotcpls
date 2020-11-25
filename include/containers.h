@@ -47,6 +47,8 @@ void *list_get(list_t *list, int itemid);
 
 int list_remove(list_t *list, void *item);
 
+void list_clean(list_t *list);
+
 void list_free(list_t *list);
 
 #endif

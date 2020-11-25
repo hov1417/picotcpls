@@ -170,6 +170,15 @@ int list_remove(list_t *list, void *item) {
   return -1;
 }
 
+/**
+ * Virtually clean the list
+ */
+void list_clean(list_t *list) {
+  if (!list)
+    return;
+  list->size = 0;
+}
+
 void list_free(list_t *list) {
   if (!list)
     return;
