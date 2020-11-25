@@ -2166,7 +2166,7 @@ int handle_tcpls_control_record(ptls_t *tls, struct st_ptls_record_t *rec)
         }
       }
       /** always reserve memory (won't if enough left) */
-      if ((ret = ptls_buffer_reserve(tls->tcpls_buf, rec->length-sizeof(type))) != 0)
+      if ((ret = ptls_buffer_reserve(tls->tcpls_buf, rec->length)) != 0)
         goto Exit;
       memcpy(tls->tcpls_buf->base+tls->tcpls_buf->off, rec->fragment, rec->length);
       tls->tcpls_buf->off += rec->length;

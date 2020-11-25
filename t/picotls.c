@@ -1250,7 +1250,18 @@ static void test_sends_varlen_bpf_prog(void)
   consumed = tcpls_server->sendbuf->off;
   ret = ptls_receive(client, &decbuf, NULL, tcpls_server->sendbuf->base, &consumed);
   ok(ret == 0);
-  /*ptls_buffer_dispose(&decbuf);*/
+  /** Check the length of the received option */
+  tcpls_options_t *option;
+  int found = 0;
+  for (int i = 0; i < tcpls_client->tcpls_options->size && !found; i++) {
+    option = list_get(tcpls_client->tcpls_options, i);
+    if (option->type == BPF_CC) {
+      found = 1;
+      ok(option->is_varlen == 1);
+      ok(option->data->len == 50000);
+    }
+  }
+  ok(found == 1);
   ctx->support_tcpls_options = 0;
   ctx_peer->support_tcpls_options = 0;
   tcpls_free(tcpls_client);
