@@ -114,6 +114,10 @@ typedef struct st_connect_info_t {
   uint32_t nbr_bytes_received;
   /** nbr records received on this con since the last ack sent */
   uint32_t nbr_records_received;
+  /** total number of DATA bytes received over this con */
+  uint64_t tot_data_bytes_received;
+  /** total number of CONTROL bytess received over this con */
+  uint64_t tot_control_bytes_received;
   /** for sending buffer */
   int send_start;
   /** end positio of the stream control event message in the current sending

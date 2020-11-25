@@ -278,7 +278,7 @@ static void tcpls_add_ips(tcpls_t *tcpls, struct sockaddr_storage *sa_our,
       tcpls_add_v6(tcpls->tls, (struct sockaddr_in6*)&sa_peer[i], 0, 0, 0);
   }
 }
-static int handle_tcpls_read(tcpls_t *tcpls, int socket) {
+static int handle_tcpls_read(tcpls_t *tcpls, int socket, ptls_buffer_t *buf) {
 
   int ret;
   if (!ptls_handshake_is_complete(tcpls->tls) && tcpls->tls->state <
@@ -295,17 +295,15 @@ static int handle_tcpls_read(tcpls_t *tcpls, int socket) {
     }
     return 0;
   }
-  ptls_buffer_t buf;
-  ptls_buffer_init(&buf, "", 0);
   struct timeval timeout;
   memset(&timeout, 0, sizeof(timeout));
-  while ((ret = tcpls_receive(tcpls->tls, &buf, &timeout)) == TCPLS_HOLD_DATA_TO_READ)
+  int init_size = buf->off;
+  while ((ret = tcpls_receive(tcpls->tls, buf, &timeout)) == TCPLS_HOLD_DATA_TO_READ)
     ;
   if (ret < 0) {
     fprintf(stderr, "tcpls_receive returned %d\n",ret);
   }
-  ret = buf.off;
-  ptls_buffer_dispose(&buf);
+  ret = buf->off-init_size;
   return ret;
 }
 
@@ -345,15 +343,20 @@ static int handle_tcpls_write(tcpls_t *tcpls, struct conn_to_tcpls *conntotcpls,
 
 static int handle_server_zero_rtt_test(list_t *conn_tcpls, fd_set *readset) {
   int ret = 1;
+  ptls_buffer_t recvbuf;
+  ptls_buffer_init(&recvbuf, "", 0);
   for (int i = 0; i < conn_tcpls->size; i++) {
     struct conn_to_tcpls *conn = list_get(conn_tcpls, i);
     if (FD_ISSET(conn->conn_fd, readset)) {
-      ret = handle_tcpls_read(conn->tcpls, conn->conn_fd);
-      if (ptls_handshake_is_complete(conn->tcpls->tls))
+      ret = handle_tcpls_read(conn->tcpls, conn->conn_fd, &recvbuf);
+      if (ptls_handshake_is_complete(conn->tcpls->tls)){
+        ptls_buffer_dispose(&recvbuf);
         return 0;
+      }
       break;
     }
   }
+  ptls_buffer_dispose(&recvbuf);
   return ret;
 }
 
@@ -361,15 +364,18 @@ static int handle_server_multipath_test(list_t *conn_tcpls, int inputfd, fd_set
     *readset, fd_set *writeset) {
   /** Now Read data for all tcpls_t * that wants to read */
   int ret = 1;
+  ptls_buffer_t recvbuf;
+  ptls_buffer_init(&recvbuf, "", 0);
   for (int i = 0; i < conn_tcpls->size; i++) {
     struct conn_to_tcpls *conn = list_get(conn_tcpls, i);
     if (FD_ISSET(conn->conn_fd, readset)) {
-      ret = handle_tcpls_read(conn->tcpls, conn->conn_fd);
+      ret = handle_tcpls_read(conn->tcpls, conn->conn_fd, &recvbuf);
       if (ptls_handshake_is_complete(conn->tcpls->tls) && conn->is_primary)
         conn->wants_to_write = 1;
       break;
     }
   }
+  ptls_buffer_dispose(&recvbuf);
   /** Write data for all tcpls_t * that wants to write :-) */
   for (int i = 0; i < conn_tcpls->size; i++) {
     struct conn_to_tcpls *conn = list_get(conn_tcpls, i);
@@ -385,8 +391,15 @@ static int handle_server_multipath_test(list_t *conn_tcpls, int inputfd, fd_set
 
 static int handle_client_multipath_test(tcpls_t *tcpls, struct cli_data *data) {
   /** handshake*/
-  if (handle_tcpls_read(tcpls, 0) < 0)
-    return -1;
+  int ret;
+  ptls_buffer_t recvbuf;
+  ptls_buffer_init(&recvbuf, "", 0);
+  FILE *mtest = fopen("multipath_test.data", "w");
+  assert(mtest);
+  if (handle_tcpls_read(tcpls, 0, &recvbuf) < 0) {
+    ret = -1;
+    goto Exit;
+  }
   printf("Handshake done\n");
   fd_set readfds, writefds, exceptfds;
   int has_migrated = 0;
@@ -417,7 +430,7 @@ static int handle_client_multipath_test(tcpls_t *tcpls, struct cli_data *data) {
     for (int i = 0; i < data->socklist->size; i++) {
       socket = list_get(data->socklist, i);
       if (FD_ISSET(*socket, &readfds)) {
-        if ((ret = handle_tcpls_read(tcpls, *socket)) < 0) {
+        if ((ret = handle_tcpls_read(tcpls, *socket, &recvbuf)) < 0) {
           fprintf(stderr, "handle_tcpls_read returned %d\n",ret);
           break;
         }
@@ -429,6 +442,10 @@ static int handle_client_multipath_test(tcpls_t *tcpls, struct cli_data *data) {
         break;
       }
     }
+    /** consume received data */
+    fwrite(recvbuf.base, recvbuf.off, 1, mtest);
+    recvbuf.off = 0;
+
     if (received_data >= 41457280  && !has_remigrated) {
       has_remigrated = 1;
       /*struct timeval timeout;*/
@@ -447,7 +464,7 @@ static int handle_client_multipath_test(tcpls_t *tcpls, struct cli_data *data) {
       prop.client.mpjoin = 1;
       prop.client.zero_rtt = 1;
       prop.client.dest = (struct sockaddr_storage *) &tcpls->v4_addr_llist->addr;
-      int ret = tcpls_handshake(tcpls->tls, &prop);
+      ret = tcpls_handshake(tcpls->tls, &prop);
       if (!ret) {
         streamid_t streamid = tcpls_stream_new(tcpls->tls, NULL, (struct sockaddr*)
             &tcpls->v4_addr_llist->addr);
@@ -459,7 +476,7 @@ static int handle_client_multipath_test(tcpls_t *tcpls, struct cli_data *data) {
       }
       else {
         fprintf(stderr, "tcpls_handshake returned %d\n", ret);
-        return -1;
+        goto Exit;
       }
     }
     /** We test a migration */
@@ -492,7 +509,11 @@ static int handle_client_multipath_test(tcpls_t *tcpls, struct cli_data *data) {
       }
     }
   }
-  return 0;
+  ret = 0;
+Exit:
+  fclose(mtest);
+  ptls_buffer_dispose(&recvbuf);
+  return ret;
 }
 
 static int handle_client_simple_handshake(tcpls_t *tcpls, struct cli_data *data) {
@@ -894,7 +915,7 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
           else {
             fprintf(stderr, "Accepting a new connection\n");
             tcpls_t *new_tcpls = tcpls_new(ctx,  1);
-            new_tcpls->enable_failover = 1;
+            new_tcpls->enable_failover = 0;
             struct conn_to_tcpls conntcpls;
             memset(&conntcpls, 0, sizeof(conntcpls));
             conntcpls.conn_fd = new_conn;
@@ -974,7 +995,7 @@ static int run_client(struct sockaddr_storage *sa_our, struct sockaddr_storage
   tcpls_t *tcpls = tcpls_new(ctx, 0);
   tcpls_add_ips(tcpls, sa_our, sa_peer, nbr_our, nbr_peer);
   ctx->output_decrypted_tcpls_data = 0;
-  tcpls->enable_failover = 1;
+  tcpls->enable_failover = 0;
 
   if (ctx->support_tcpls_options) {
     int ret = handle_client_connection(tcpls, &data, test);
