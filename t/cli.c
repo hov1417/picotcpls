@@ -92,6 +92,7 @@ struct conn_to_tcpls {
   streamid_t streamid;
   unsigned int wants_to_write : 1;
   tcpls_t *tcpls;
+  unsigned int to_remove : 1;
 };
 
 struct cli_data {
@@ -244,7 +245,7 @@ static int handle_connection_event(tcpls_event_t event, int socket, int transpor
         for (int i = 0; i < conntcpls->size; i++) {
           ctcpls = list_get(conntcpls, i);
           if (ctcpls->conn_fd == socket) {
-            list_remove(conntcpls, ctcpls);
+            ctcpls->to_remove = 1;
             break;
           }
         }
@@ -308,12 +309,13 @@ static int handle_tcpls_read(tcpls_t *tcpls, int socket, ptls_buffer_t *buf) {
   return ret;
 }
 
-static int handle_tcpls_write(tcpls_t *tcpls, struct conn_to_tcpls *conntotcpls,  int inputfd) {
+static int handle_tcpls_write(tcpls_t *tcpls, struct conn_to_tcpls *conntotcpls,  int *inputfd) {
   static const size_t block_size = 8192;
   uint8_t buf[block_size];
   int ret, ioret;
-  while ((ioret = read(inputfd, buf, block_size)) == -1 && errno == EINTR)
-    ;
+  if (*inputfd > 0)
+    while ((ioret = read(*inputfd, buf, block_size)) == -1 && errno == EINTR)
+      ;
   if (ioret > 0) {
     if((ret = tcpls_send(tcpls->tls, conntotcpls->streamid, buf, ioret)) < 0) {
       fprintf(stderr, "tcpls_send returned %d for sending on streamid %u\n",
@@ -331,8 +333,8 @@ static int handle_tcpls_write(tcpls_t *tcpls, struct conn_to_tcpls *conntotcpls,
         %u\n", conntotcpls->streamid);
     conntotcpls->wants_to_write = 0;
     tcpls_stream_close(tcpls->tls, conntotcpls->streamid, 1);
-    close(inputfd);
-    inputfd = -1;
+    close(*inputfd);
+    *inputfd = -1;
   }
   else {
     perror("read failed");
@@ -361,7 +363,7 @@ static int handle_server_zero_rtt_test(list_t *conn_tcpls, fd_set *readset) {
   return ret;
 }
 
-static int handle_server_multipath_test(list_t *conn_tcpls, int inputfd, fd_set
+static int handle_server_multipath_test(list_t *conn_tcpls, int *inputfd, fd_set
     *readset, fd_set *writeset) {
   /** Now Read data for all tcpls_t * that wants to read */
   int ret = 1;
@@ -371,7 +373,7 @@ static int handle_server_multipath_test(list_t *conn_tcpls, int inputfd, fd_set
     struct conn_to_tcpls *conn = list_get(conn_tcpls, i);
     if (FD_ISSET(conn->conn_fd, readset)) {
       ret = handle_tcpls_read(conn->tcpls, conn->conn_fd, &recvbuf);
-      if (ptls_handshake_is_complete(conn->tcpls->tls) && conn->is_primary)
+      if (ptls_handshake_is_complete(conn->tcpls->tls) && conn->is_primary && *inputfd > 0)
         conn->wants_to_write = 1;
       break;
     }
@@ -830,6 +832,7 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
   int inputfd = 0;
   int listenfd[nbr_ours];
   list_t *conn_tcpls = new_list(sizeof(struct conn_to_tcpls), 2);
+  list_t *conn_to_remove = new_list(sizeof(struct conn_to_tcpls), 2);
   ctx->connection_event_cb = &handle_connection_event;
   ctx->stream_event_cb = &handle_stream_event;
   ctx->address_event_cb = &handle_address_event;
@@ -883,7 +886,19 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
 
   if (ctx->support_tcpls_options) {
     while (1) {
-      /*sleep(1);*/
+      struct conn_to_tcpls *conn;
+      /** do some cleanup of tcpls_l if some have to be removed */
+      for (int i = 0; i < conn_tcpls->size; i++) {
+          conn = list_get(conn_tcpls, i);
+          if (conn->to_remove) {
+            list_add(conn_to_remove, conn);
+          }
+      }
+      for (int i = 0; i < conn_to_remove->size; i++) {
+        list_remove(conn_tcpls, list_get(conn_to_remove, i));
+      }
+      list_clean(conn_to_remove);
+
       fd_set readset, writeset;
       int maxfd = 0;
       do {
@@ -899,7 +914,7 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
         /** put all tcpls connections within the read set, and the write set if
          * they want to write */
         for (int i = 0; i < conn_tcpls->size; i++) {
-          struct conn_to_tcpls *conn = list_get(conn_tcpls, i);
+          conn = list_get(conn_tcpls, i);
           FD_SET(conn->conn_fd, &readset);
           if (conn->wants_to_write)
             FD_SET(conn->conn_fd, &writeset);
@@ -949,7 +964,7 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
             fprintf(stderr, "failed to open file:%s:%s\n", input_file, strerror(errno));
             goto Exit;
           }
-          if ((ret = handle_server_multipath_test(conn_tcpls, inputfd,  &readset, &writeset)) < -1) {
+          if ((ret = handle_server_multipath_test(conn_tcpls, &inputfd,  &readset, &writeset)) < -1) {
             goto Exit;
           }
           break;

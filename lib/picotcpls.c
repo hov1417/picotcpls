@@ -1285,7 +1285,7 @@ ret = 0;
 uint8_t input[PTLS_MAX_ENCRYPTED_RECORD_SIZE];
 for (int i =  0; i < tcpls->connect_infos->size; i++) {
   con = list_get(tcpls->connect_infos, i);
-  if (FD_ISSET(con->socket, &rset)) {
+  if (FD_ISSET(con->socket, &rset) && con->state == CONNECTED) {
       ret = recv(con->socket, input, PTLS_MAX_ENCRYPTED_RECORD_SIZE, 0);
     if (ret <= 0) {
       if (errno == ECONNRESET) {
