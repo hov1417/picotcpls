@@ -419,7 +419,8 @@ static int handle_client_multipath_test(tcpls_t *tcpls, struct cli_data *data) {
       list_remove(data->socklist, socket);
     }
     list_clean(data->socktoremove);
-
+    if (data->socklist->size == 0)
+      goto Exit;
     int maxfds = 0;
     do {
       FD_ZERO(&readfds);
@@ -593,10 +594,6 @@ static int handle_client_connection(tcpls_t *tcpls, struct cli_data *data,
           return 1;
         }
         ret = handle_client_multipath_test(tcpls, data);
-        if (!ret)
-          printf("TEST MULTIPATH: SUCCESS\n");
-        else
-          printf("TEST MULTIPATH: FAILURE\n");
       }
       break;
     case T_NOTEST:
@@ -898,6 +895,8 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
         list_remove(conn_tcpls, list_get(conn_to_remove, i));
       }
       list_clean(conn_to_remove);
+      if (inputfd && conn_tcpls->size == 0)
+        goto Exit;
 
       fd_set readset, writeset;
       int maxfd = 0;
