@@ -382,7 +382,7 @@ int buffer_push_encrypted_records(ptls_t *tls, ptls_buffer_t *buf, uint8_t type,
             buf->off += aead_encrypt(ctx, buf->base + buf->off, src, chunk_size,
                 tcpls_header, tcpls_header_size, type);
             
-            if (tls->tcpls && tls->tcpls->enable_failover && is_failover_valid_message(type, tcpls_message)) {
+            if (tls->tcpls && tls->tcpls->enable_failover) {
               assert(tls->tcpls->sending_con);
               // push seq and record size
               queue_ret_t ret = tcpls_record_queue_push(tls->tcpls->sending_con->send_queue,
@@ -4199,6 +4199,8 @@ void ptls_free(ptls_t *tls)
         ptls_clear_memory(tls->pending_handshake_secret, PTLS_MAX_DIGEST_SIZE);
         free(tls->pending_handshake_secret);
     }
+    if (tls->tcpls_buf)
+      free(tls->tcpls_buf);
     update_open_count(tls->ctx, -1);
     ptls_clear_memory(tls, sizeof(*tls));
     free(tls);

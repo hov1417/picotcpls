@@ -2208,10 +2208,6 @@ static void test_tcpls_stream_api(void)
   ptls_buffer_init(&sbuf, "", 0);
   client = tcpls->tls;
   server = tcpls_server->tls;
-  connect_info_t con;
-  memset(&con, 0, sizeof(con));
-  list_add(tcpls->connect_infos, &con);
-  list_add(tcpls_server->connect_infos, &con);
   tcpls->socket_rcv = 0;
   tcpls_server->socket_rcv = 0;
 

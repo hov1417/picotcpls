@@ -69,7 +69,8 @@ typedef enum tcpls_event_t {
 typedef enum tcpls_tcp_state_t {
   CLOSED,
   CONNECTING,
-  CONNECTED
+  CONNECTED,
+  JOINED
 } tcpls_tcp_state_t;
 
 struct st_tcpls_options_t {
@@ -123,12 +124,19 @@ typedef struct st_connect_info_t {
   /** end positio of the stream control event message in the current sending
    * buffer*/
   int send_stream_attach_in_sendbuf_pos;
-  /** Id given for this transport stream */
+  /** Id given for this connection */
   uint32_t this_transportid;
-  /** Id of the peer fort this transport stream */
+  /** Id of the peer fort this connection */
   uint32_t peer_transportid;
   /** Is this connection primary? Primary means the default one */
   unsigned is_primary : 1;
+  /* con_to_failover received a FAILOVER message with a stream linked to this
+   * con.
+   * If we have data in our send_queue we need to send them over con and then destroy the
+   * connection 
+   */
+  uint32_t transportid_to_failover;
+
   /** RTT of this connection, computed by the client and ?eventually given to the
    * server TODO*/
   struct timeval connect_time;
@@ -173,8 +181,16 @@ typedef struct st_tcpls_stream {
   ptls_aead_context_t *aead_enc;
   /* Context for decryption */
   ptls_aead_context_t *aead_dec;
-  /** Attached connection */
-  connect_info_t *con;
+  /** Attached connection -- must be the index of the connection within
+   * tcpls->connect_infos
+   **/
+  uint32_t transportid;
+  /**
+   * Origin attached con
+   * In case of failover, we mark orcon as the origin con
+   * of this stream, before it got moved
+   **/
+  uint32_t orcon_transportid;
 } tcpls_stream_t;
 
 
@@ -330,6 +346,9 @@ void tcpls_free(tcpls_t *tcpls);
 /** Internal to picotls */
 
 int get_tcpls_header_size(tcpls_t *tcpls, uint8_t type, tcpls_enum_t message);
+
+connect_info_t *connection_get(tcpls_t *tcpls, uint32_t transportid);
+
 int is_varlen(tcpls_enum_t message);
 
 int is_failover_valid_message(uint8_t type, tcpls_enum_t message);
