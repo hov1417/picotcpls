@@ -363,7 +363,7 @@ int buffer_push_encrypted_records(ptls_t *tls, ptls_buffer_t *buf, uint8_t type,
     while (len != 0) {
         /** XXX refactor to a function to format the tcpls header */
         size_t chunk_size = len;
-        int  mpseq = -1;
+        int  mpseq = 0;
         if (tls->tcpls && tls->tcpls->enable_multipath && (type ==
               PTLS_CONTENT_TYPE_TCPLS_DATA || is_varlen(tcpls_message))) {
           /** header multipath  -- just a sequence number*/

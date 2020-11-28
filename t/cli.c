@@ -317,7 +317,7 @@ static int handle_tcpls_write(tcpls_t *tcpls, struct conn_to_tcpls *conntotcpls,
     while ((ioret = read(*inputfd, buf, block_size)) == -1 && errno == EINTR)
       ;
   if (ioret > 0) {
-    if((ret = tcpls_send(tcpls->tls, conntotcpls->streamid, buf, ioret)) < 0) {
+    if((ret = tcpls_send(tcpls->tls, conntotcpls->streamid, buf, ioret)) != 0) {
       fprintf(stderr, "tcpls_send returned %d for sending on streamid %u\n",
           ret, conntotcpls->streamid);
       /*close(inputfd);*/

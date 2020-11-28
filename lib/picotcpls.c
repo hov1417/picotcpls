@@ -675,6 +675,8 @@ int tcpls_handshake(ptls_t *tls, ptls_handshake_properties_t *properties) {
 
       ptls_buffer_dispose(&sendbuf);
       ptls_buffer_dispose(&decryptbuf);
+      if (!rret)
+        con->state = JOINED;
       return rret;
     }
   }
@@ -872,10 +874,12 @@ int tcpls_accept(tcpls_t *tcpls, int socket, uint8_t *cookie, uint32_t transport
     if (!con) {
       stream_send_control_message(tcpls->tls, newconn.sendbuf, tcpls->tls->traffic_protection.enc.aead, input, TRANSPORT_NEW, 8);
       buf = newconn.sendbuf;
+      newconn.state = JOINED;
     }
     else {
       stream_send_control_message(tcpls->tls, con->sendbuf, tcpls->tls->traffic_protection.enc.aead, input, TRANSPORT_NEW, 8);
       buf = con->sendbuf;
+      con->state = JOINED;
     }
     /*connect_info_t *con = get_primary_con_info(tcpls);*/
     ret = send(socket, buf->base, buf->off, 0);
@@ -1218,7 +1222,9 @@ int tcpls_send(ptls_t *tls, streamid_t streamid, const void *input, size_t nbyte
     /** Error in encryption -- TODO document the possibilties */
     case 0:
       break;
-    default: return ret;
+    default:
+      fprintf(stderr, "Woups, ptls_send returns %d\n", ret);
+            return ret;
   }
   /** Send over the socket's stream */
   ret = send(con->socket, con->sendbuf->base+con->send_start,
@@ -1255,11 +1261,11 @@ int tcpls_send(ptls_t *tls, streamid_t streamid, const void *input, size_t nbyte
   /** did we sent everything? =) */
   if (!did_we_sent_everything(tcpls, stream, ret, PTLS_CONTENT_TYPE_TCPLS_DATA, NONE))
     return -1;
+  tcpls->check_stream_attach_sent = 0;
   if (con->send_start != con->sendbuf->off) {
     return TCPLS_HOLD_DATA_TO_SEND;
   }
   else {
-    tcpls->check_stream_attach_sent = 0;
     return TCPLS_OK;
   }
 }
@@ -1354,15 +1360,7 @@ int tcpls_receive(ptls_t *tls, ptls_buffer_t *decryptbuf, struct timeval *tv) {
             /*stream_send_unacked_data(tcpls, con);*/
           }
         }
-        else {
-          /** Do we still have a stream? */
-          int do_we_have_a_stream = count_streams_from_socket(tcpls, con->socket);
-          if (!tls->is_server && tcpls->enable_failover && do_we_have_a_stream &&
-              tcpls->connect_infos->size > 1) {
-            /** Alriight, we need to failover -- Send event back to app as well!*/
-
-          }
-        }
+        //XXX
         connection_close(tcpls, con);
         return ret;
       }
@@ -2398,6 +2396,10 @@ static int did_we_sent_everything(tcpls_t *tcpls, tcpls_stream_t *stream, int by
             con->sendbuf->off-sending, 0);
         if (ret > 0) {
           sending += ret;
+        }
+        else {
+          fprintf(stderr, "Error while flushing\n");
+          return 0;
         }
       }
       /* any select error?*/
