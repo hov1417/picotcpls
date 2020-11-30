@@ -28,11 +28,13 @@ struct st_tcpls_record_fifo_t {
 
 tcpls_record_fifo_t *tcpls_record_queue_new(int max_record_num);
 
-queue_ret_t tcpls_record_queue_push(tcpls_record_fifo_t *fifo, uint32_t mpseq, uint32_t reclen);
+queue_ret_t tcpls_record_queue_push(tcpls_record_fifo_t *fifo, uint32_t mpseq,
+    uint32_t streamid, uint32_t stream_seq, uint32_t reclen);
 
 uint32_t tcpls_record_queue_seq(tcpls_record_fifo_t *queue);
 
-queue_ret_t tcpls_record_queue_pop(tcpls_record_fifo_t *fifo, uint32_t *mpseq, uint32_t *reclen);
+queue_ret_t tcpls_record_queue_pop(tcpls_record_fifo_t *fifo, uint32_t *mpseq,
+    uint32_t *streamid, uint32_t *stream_seq, uint32_t *reclen);
 
 queue_ret_t tcpls_record_queue_del(tcpls_record_fifo_t *fifo, int n);
 

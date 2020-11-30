@@ -756,14 +756,14 @@ static int handle_connection(int sockfd, ptls_context_t *ctx, const char *server
           send_amount = max_can_be_sent - early_bytes_sent;
         }
         if (send_amount != 0) {
-          if ((ret = ptls_send(tls, &encbuf, ptbuf.base, send_amount)) != 0) {
+          if ((ret = ptls_send(tls, 0, &encbuf, ptbuf.base, send_amount)) != 0) {
             fprintf(stderr, "ptls_send(early_data):%d\n", ret);
             goto Exit;
           }
           early_bytes_sent += send_amount;
         }
       } else {
-        if ((ret = ptls_send(tls, &encbuf, ptbuf.base, ptbuf.off)) != 0) {
+        if ((ret = ptls_send(tls, 0, &encbuf, ptbuf.base, ptbuf.off)) != 0) {
           fprintf(stderr, "ptls_send(1rtt):%d\n", ret);
           goto Exit;
         }

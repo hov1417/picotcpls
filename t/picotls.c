@@ -656,7 +656,7 @@ static void test_handshake(ptls_iovec_t ticket, int mode, int expect_ticket, int
         break;
     case TEST_HANDSHAKE_EARLY_DATA:
         ok(max_early_data_size == ctx_peer->max_early_data_size);
-        ret = ptls_send(client, &cbuf, req, strlen(req));
+        ret = ptls_send(client, 0, &cbuf, req, strlen(req));
         ok(ret == 0);
         break;
     }
@@ -698,7 +698,7 @@ static void test_handshake(ptls_iovec_t ticket, int mode, int expect_ticket, int
         cbuf.off = 0;
         decbuf.off = 0;
 
-        ret = ptls_send(server, &sbuf, resp, strlen(resp));
+        ret = ptls_send(server, 0, &sbuf, resp, strlen(resp));
         ok(ret == 0);
     } else {
         ok(consumed == cbuf.off);
@@ -738,7 +738,7 @@ static void test_handshake(ptls_iovec_t ticket, int mode, int expect_ticket, int
     }
 
     if (mode != TEST_HANDSHAKE_EARLY_DATA || require_client_authentication == 1) {
-        ret = ptls_send(client, &cbuf, req, strlen(req));
+        ret = ptls_send(client, 0, &cbuf, req, strlen(req));
         ok(ret == 0);
 
         consumed = cbuf.off;
@@ -751,7 +751,7 @@ static void test_handshake(ptls_iovec_t ticket, int mode, int expect_ticket, int
         decbuf.off = 0;
         cbuf.off = 0;
 
-        ret = ptls_send(server, &sbuf, resp, strlen(resp));
+        ret = ptls_send(server, 0, &sbuf, resp, strlen(resp));
         ok(ret == 0);
     }
 
@@ -781,7 +781,7 @@ static void test_handshake(ptls_iovec_t ticket, int mode, int expect_ticket, int
         ok(ret == 0);
         ok(server->needs_key_update);
         ok(server->key_update_send_request);
-        ret = ptls_send(server, &sbuf, "good bye", 8);
+        ret = ptls_send(server, 0,  &sbuf, "good bye", 8);
         ok(ret == 0);
         ok(!server->needs_key_update);
         ok(!server->key_update_send_request);
@@ -795,7 +795,7 @@ static void test_handshake(ptls_iovec_t ticket, int mode, int expect_ticket, int
         ok(!client->key_update_send_request);
         sbuf.off = 0;
         decbuf.off = 0;
-        ret = ptls_send(client, &cbuf, "hello", 5);
+        ret = ptls_send(client, 0, &cbuf, "hello", 5);
         ok(ret == 0);
         consumed = cbuf.off;
         ret = ptls_receive(server, &decbuf, NULL, cbuf.base, &consumed);
@@ -1070,7 +1070,7 @@ static void test_enforce_retry(int use_cookie)
     ok(sbuf.off == consumed);
     sbuf.off = 0;
 
-    ret = ptls_send(client, &cbuf, "hello world", 11);
+    ret = ptls_send(client, 0, &cbuf, "hello world", 11);
     ok(ret == 0);
 
     consumed = cbuf.off;
@@ -1216,8 +1216,8 @@ static void test_sends_varlen_bpf_prog(void)
   server = tcpls_server->tls;
   connect_info_t con;
   memset(&con, 0, sizeof(con));
+  con.this_transportid = 42;
   list_add(tcpls_client->connect_infos, &con);
-  list_add(tcpls_server->connect_infos, &con);
   tcpls_client->socket_rcv = 0;
   tcpls_server->socket_rcv = 0;
   ret = ptls_handle_message(client, &cbuf, coffs, 0, NULL, 0, NULL);
@@ -1238,6 +1238,13 @@ static void test_sends_varlen_bpf_prog(void)
   ok(sbuf.off == 0);
   ok(ptls_handshake_is_complete(server));
   
+  struct sockaddr_in addr;
+  bzero(&addr, sizeof(addr));
+  inet_pton(AF_INET, "192.168.1.1", &addr.sin_addr);
+  addr.sin_family = AF_INET;
+  ok(tcpls_add_v4(tcpls_server->tls, &addr, 1, 0, 0) == 0);
+  streamid_t streamid = tcpls_stream_new(server, NULL, (struct sockaddr*) &addr);
+
   ptls_buffer_init(&decbuf, "", 0);
   ptls_buffer_dispose(&sbuf);
   uint8_t input[50000];
@@ -1245,10 +1252,12 @@ static void test_sends_varlen_bpf_prog(void)
   ptls_buffer_init(&sbuf, input, 50000);
   ret = ptls_set_bpf_cc(server, input, 50000, 1, 1);
   ok(ret == 0);
-  ret = tcpls_send_tcpoption(tcpls_server, 1, BPF_CC);
+  ret = tcpls_send_tcpoption(tcpls_server, streamid, BPF_CC);
   ok(ret == 0);
-  consumed = tcpls_server->sendbuf->off;
-  ret = ptls_receive(client, &decbuf, NULL, tcpls_server->sendbuf->base, &consumed);
+  connect_info_t *cons = connection_get(tcpls_server, 0);
+  consumed = cons->sendbuf->off;
+  tcpls_client->socket_rcv = con.socket;
+  ret = ptls_receive(client, &decbuf, NULL, cons->sendbuf->base, &consumed);
   ok(ret == 0);
   /** Check the length of the received option */
   tcpls_options_t *option;
@@ -1367,10 +1376,11 @@ static void test_sends_tcpls_record(void)
   client = tcpls_client->tls;
   server = tcpls_server->tls;
   
-  connect_info_t con;
-  memset(&con, 0, sizeof(con));
-  list_add(tcpls_client->connect_infos, &con);
-  list_add(tcpls_server->connect_infos, &con);
+  /*connect_info_t con;*/
+  /*memset(&con, 0, sizeof(con));*/
+  /*con.this_transportid = 42;*/
+  /*list_add(tcpls_client->connect_infos, &con);*/
+  /*list_add(tcpls_server->connect_infos, &con);*/
   tcpls_client->socket_rcv = 0;
   tcpls_server->socket_rcv = 0;
 
@@ -1397,11 +1407,17 @@ static void test_sends_tcpls_record(void)
   
   cbuf.off = 0;
   ptls_buffer_init(&decbuf, "", 0);
-  ret = tcpls_send_tcpoption(tcpls_client, 1, USER_TIMEOUT);
-  consumed = tcpls_client->sendbuf->off;
+  struct sockaddr_in addr;
+  bzero(&addr, sizeof(addr));
+  inet_pton(AF_INET, "192.168.1.1", &addr.sin_addr);
+  addr.sin_family = AF_INET;
+  ok(tcpls_add_v4(tcpls_client->tls, &addr, 1, 0, 0) == 0);
+  streamid_t streamid = tcpls_stream_new(client, NULL, (struct sockaddr*) &addr);
+  ret = tcpls_send_tcpoption(tcpls_client, streamid, USER_TIMEOUT);
+  connect_info_t *con = connection_get(tcpls_client, 0);
+  consumed = con->sendbuf->off;
   ok(ret == 0);
-  
-  ret = ptls_receive(server, &decbuf, NULL, tcpls_client->sendbuf->base, &consumed);
+  ret = ptls_receive(server, &decbuf, NULL, con->sendbuf->base, &consumed);
   ok(ret==0);
   decbuf.off = 0;
   cbuf.off = 0;
@@ -1868,7 +1884,7 @@ static void test_handshake_api(void)
     ok(client_hs_prop.client.max_early_data_size != 0);
     ok(client_hs_prop.client.early_data_acceptance == PTLS_EARLY_DATA_ACCEPTANCE_UNKNOWN);
     ok(cbuf.off != 0);
-    ret = ptls_send(client, &cbuf, "hello world", 11); /* send 0-RTT data that'll be rejected */
+    ret = ptls_send(client, 0, &cbuf, "hello world", 11); /* send 0-RTT data that'll be rejected */
     ok(ret == 0);
     size_t inlen = cbuf.off;
     ret = ptls_handshake(server, &sbuf, cbuf.base, &inlen, &server_hs_prop); /* CH -> HRR */
@@ -2294,16 +2310,16 @@ ok(r_fifo->size == 0);
 ok(r_fifo->max_record_num == 3);
 struct st_ptls_record_t rec;
 memset(&rec, 0, sizeof(rec));
-ok(tcpls_record_queue_push(r_fifo, 0, 10) == OK);
-ok(tcpls_record_queue_push(r_fifo, 1, 10) == OK);
+ok(tcpls_record_queue_push(r_fifo, 0, 1, 0, 10) == OK);
+ok(tcpls_record_queue_push(r_fifo, 1, 1, 1, 10) == OK);
 ok(tcpls_record_queue_seq(r_fifo) == 0);
-ok(tcpls_record_queue_push(r_fifo, 2, 10) == OK);
+ok(tcpls_record_queue_push(r_fifo, 2, 1, 2, 10) == OK);
 ok(r_fifo->front_idx == 0);
 ok(tcpls_record_queue_del(r_fifo, 1) == OK);
 ok(tcpls_record_queue_seq(r_fifo) == 1);
 ok(tcpls_record_queue_del(r_fifo, 2) == OK);
 ok(tcpls_record_queue_del(r_fifo, 1) == EMPTY);
-ok(tcpls_record_queue_push(r_fifo, 4, 10) == OK);
+ok(tcpls_record_queue_push(r_fifo, 4, 1, 3, 10) == OK);
 ok(tcpls_record_queue_del(r_fifo, 1) == OK);
 ok(r_fifo->front_idx == r_fifo->back_idx);
 tcpls_record_fifo_free(r_fifo);

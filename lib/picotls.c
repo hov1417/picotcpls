@@ -354,7 +354,7 @@ static int aead_decrypt(ptls_aead_context_t *ctx,
 #endif /* #if PTLS_FUZZ_HANDSHAKE */
 
 
-int buffer_push_encrypted_records(ptls_t *tls, ptls_buffer_t *buf, uint8_t type, tcpls_enum_t tcpls_message,
+int buffer_push_encrypted_records(ptls_t *tls, streamid_t streamid, ptls_buffer_t *buf, uint8_t type, tcpls_enum_t tcpls_message,
     const uint8_t *src, size_t len, ptls_aead_context_t *ctx)
 {
     int ret = 0;
@@ -381,12 +381,20 @@ int buffer_push_encrypted_records(ptls_t *tls, ptls_buffer_t *buf, uint8_t type,
                 goto Exit;
             buf->off += aead_encrypt(ctx, buf->base + buf->off, src, chunk_size,
                 tcpls_header, tcpls_header_size, type);
-            
-            if (tls->tcpls && tls->tcpls->enable_failover) {
+
+            /* tcpls message sent during the handshake are not sent over a
+             * stream
+             *
+             * Cover messages that can be sent only during initial handshake and
+             * mpjoin handshake
+             *
+             **/
+            if (tls->tcpls && tls->tcpls->enable_failover && !ptls_handshake_is_complete(tls) &&
+                !is_handshake_tcpls_message(tcpls_message)) {
               assert(tls->tcpls->sending_con);
               // push seq and record size
               queue_ret_t ret = tcpls_record_queue_push(tls->tcpls->sending_con->send_queue,
-                  mpseq, chunk_size+ctx->algo->tag_size+tcpls_header_size+1);
+                  mpseq, streamid, (uint32_t) ctx->seq, chunk_size+ctx->algo->tag_size+tcpls_header_size+1);
               if (ret == MEMORY_FULL)
                 return PTLS_ERROR_NO_MEMORY;
             }
@@ -432,7 +440,7 @@ int buffer_encrypt_record(ptls_t *tls, ptls_buffer_t *buf, size_t rec_start,
     buf->off = rec_start;
 
     /* push encrypted records */
-    ret = buffer_push_encrypted_records(tls, buf, type, NONE, tmpbuf, bodylen, aead);
+    ret = buffer_push_encrypted_records(tls, 0, buf, type, NONE, tmpbuf, bodylen, aead);
 
 Exit:
     if (tmpbuf != NULL) {
@@ -4800,7 +4808,7 @@ Exit:
     return ret;
 }
 
-int ptls_send(ptls_t *tls, ptls_buffer_t *sendbuf, const void *input, size_t inlen)
+int ptls_send(ptls_t *tls, streamid_t streamid, ptls_buffer_t *sendbuf, const void *input, size_t inlen)
 {
     assert(tls->traffic_protection.enc.aead != NULL);
 
@@ -4823,11 +4831,11 @@ int ptls_send(ptls_t *tls, ptls_buffer_t *sendbuf, const void *input, size_t inl
         tls->key_update_send_request = 0;
     }
     if (tls->tcpls && tls->tcpls->tcpls_options_confirmed) {
-      return buffer_push_encrypted_records(tls, sendbuf, PTLS_CONTENT_TYPE_TCPLS_DATA, NONE,
+      return buffer_push_encrypted_records(tls, streamid, sendbuf, PTLS_CONTENT_TYPE_TCPLS_DATA, NONE,
           input, inlen, tls->traffic_protection.enc.aead);
     }
     else {
-      return buffer_push_encrypted_records(tls, sendbuf, PTLS_CONTENT_TYPE_APPDATA, NONE,
+      return buffer_push_encrypted_records(tls, streamid, sendbuf, PTLS_CONTENT_TYPE_APPDATA, NONE,
           input, inlen, tls->traffic_protection.enc.aead);
     }
 }

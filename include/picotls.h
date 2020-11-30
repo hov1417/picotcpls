@@ -1542,7 +1542,7 @@ int ptls_receive(ptls_t *tls, ptls_buffer_t *plaintextbuf, ptls_buffer_t *stream
 /**
  * encrypts given buffer into multiple TLS records
  */
-int ptls_send(ptls_t *tls, ptls_buffer_t *sendbuf, const void *input, size_t inlen);
+int ptls_send(ptls_t *tls, streamid_t streamid, ptls_buffer_t *sendbuf, const void *input, size_t inlen);
 
 
 /**
@@ -1671,7 +1671,7 @@ int buffer_encrypt_record(ptls_t *tls, ptls_buffer_t *buf, size_t rec_start, ptl
         ptls_buffer_push_block((buf), 2, block);                                                                                   \
     } while (0)
 
-int buffer_push_encrypted_records(ptls_t *tls, ptls_buffer_t *buf, uint8_t type,
+int buffer_push_encrypted_records(ptls_t *tls, streamid_t streamid, ptls_buffer_t *buf, uint8_t type,
     tcpls_enum_t tcpls_message, const uint8_t *src, size_t len,
     ptls_aead_context_t *aead);
 

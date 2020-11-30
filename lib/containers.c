@@ -16,8 +16,8 @@ tcpls_record_fifo_t *tcpls_record_queue_new(int max_record_num) {
   memset(fifo, 0, sizeof(*fifo));
   if (fifo == NULL)
     return NULL;
-  fifo->queue = malloc(max_record_num*2*sizeof(uint32_t));
-  memset(fifo->queue, 0, max_record_num*2*sizeof(uint32_t));
+  fifo->queue = malloc(max_record_num*4*sizeof(uint32_t));
+  memset(fifo->queue, 0, max_record_num*4*sizeof(uint32_t));
   if (fifo->queue == NULL)
     goto Exit;
   fifo->size = 0;
@@ -35,27 +35,32 @@ Exit:
  *
  * return MEMORY_FULL, OK
  */
-queue_ret_t tcpls_record_queue_push(tcpls_record_fifo_t *fifo, uint32_t mpseq, uint32_t reclen) {
+queue_ret_t tcpls_record_queue_push(tcpls_record_fifo_t *fifo, uint32_t mpseq,
+    uint32_t streamid, uint32_t stream_seq, uint32_t reclen) {
   if (fifo->size == fifo->max_record_num)
     return MEMORY_FULL;
-  memcpy(&fifo->queue[fifo->front_idx], &mpseq, sizeof(mpseq));
-  memcpy(&fifo->queue[fifo->front_idx]+sizeof(mpseq), &reclen, sizeof(reclen));
+  memcpy(&fifo->queue[fifo->front_idx], &mpseq, sizeof(uint32_t));
+  memcpy(&fifo->queue[fifo->front_idx+4], &streamid, sizeof(uint32_t));
+  memcpy(&fifo->queue[fifo->front_idx+8], &stream_seq, sizeof(uint32_t));
+  memcpy(&fifo->queue[fifo->front_idx+12], &reclen, sizeof(uint32_t));
   fifo->size++;
-  if (fifo->front_idx == (fifo->max_record_num-1)*(2*sizeof(uint32_t))) {
+  if (fifo->front_idx == (fifo->max_record_num-1)*(4*sizeof(uint32_t))) {
     fifo->front_idx = 0;
   }
   else {
-    fifo->front_idx += 2*sizeof(uint32_t);
+    fifo->front_idx += 4*sizeof(uint32_t);
   }
   return OK;
 }
 
-queue_ret_t tcpls_record_queue_pop(tcpls_record_fifo_t *fifo, uint32_t *mpseq,
-    uint32_t *reclen) {
+queue_ret_t tcpls_record_queue_pop(tcpls_record_fifo_t *fifo, uint32_t *mpseq, uint32_t *streamid,
+    uint32_t *stream_seq, uint32_t *reclen) {
   if (fifo->size == 0)
     return EMPTY;
   *mpseq = *(uint32_t *) &fifo->queue[fifo->back_idx];
-  *reclen = *(uint32_t *) &fifo->queue[fifo->back_idx+4];
+  *streamid = *(uint32_t *) &fifo->queue[fifo->back_idx+4];
+  *stream_seq = *(uint32_t *) &fifo->queue[fifo->back_idx+8];
+  *reclen = *(uint32_t *) &fifo->queue[fifo->back_idx+12];
   return tcpls_record_queue_del(fifo, 1);
 }
 
@@ -63,11 +68,11 @@ queue_ret_t tcpls_record_queue_del(tcpls_record_fifo_t *fifo, int n) {
   while (n > 0) {
     if (fifo->size == 0)
       return EMPTY;
-    if (fifo->back_idx == (fifo->max_record_num - 1)*2*sizeof(uint32_t)) {
+    if (fifo->back_idx == (fifo->max_record_num - 1)*4*sizeof(uint32_t)) {
       fifo->back_idx = 0;
     }
     else {
-      fifo->back_idx+= 2*sizeof(uint32_t);
+      fifo->back_idx+= 4*sizeof(uint32_t);
     }
     fifo->size--;
     n--;

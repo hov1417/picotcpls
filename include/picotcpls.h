@@ -191,6 +191,11 @@ typedef struct st_tcpls_stream {
    * of this stream, before it got moved
    **/
   uint32_t orcon_transportid;
+  /*Used when failover is enable -- tell us from which seq number is expected remain in our sending
+   *buffer for this stream (last_seq_poped+1 is expected to be the next one in sendbuf if one is)
+   *We use this information within a FAILOVER message to tell the peer which number is expected to
+   *decrypt correctly */
+  uint32_t last_seq_poped;
 } tcpls_stream_t;
 
 
@@ -350,6 +355,8 @@ int get_tcpls_header_size(tcpls_t *tcpls, uint8_t type, tcpls_enum_t message);
 connect_info_t *connection_get(tcpls_t *tcpls, uint32_t transportid);
 
 int is_varlen(tcpls_enum_t message);
+
+int is_handshake_tcpls_message(tcpls_enum_t message);
 
 int is_failover_valid_message(uint8_t type, tcpls_enum_t message);
 
