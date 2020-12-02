@@ -71,6 +71,7 @@ static void shift_buffer(ptls_buffer_t *buf, size_t delta)
 typedef enum integration_test_t {
   T_NOTEST,
   T_MULTIPATH,
+  T_SIMPLE_TRANSFER,
   T_SIMPLE_HANDSHAKE,
   T_ZERO_RTT_HANDSHAKE
 } integration_test_t;
@@ -161,9 +162,17 @@ static int handle_client_stream_event(tcpls_t *tcpls, tcpls_event_t event, strea
     int transportid, void *cbdata) {
   struct cli_data *data = (struct cli_data*) cbdata;
   switch (event) {
+    case STREAM_NETWORK_RECOVERED:
+      fprintf(stderr, "Handling stream_network_recovered callback\n");
+      list_add(data->streamlist, &streamid);
+      break;
     case STREAM_OPENED:
       fprintf(stderr, "Handling stream_opened callback\n");
       list_add(data->streamlist, &streamid);
+      break;
+    case STREAM_NETWORK_FAILURE:
+      fprintf(stderr, "Handling stream_network_failure callback, removing stream %u\n", streamid);
+      list_remove(data->streamlist, &streamid);
       break;
     case STREAM_CLOSED:
       fprintf(stderr, "Handling stream_closed callback, removing stream %u\n", streamid);
@@ -179,7 +188,11 @@ static int handle_stream_event(tcpls_t *tcpls, tcpls_event_t event,
   struct conn_to_tcpls *conn_tcpls;
   switch (event) {
     case STREAM_OPENED:
-      fprintf(stderr, "Handling stream_opened callback\n");
+    case STREAM_NETWORK_RECOVERED:
+      if (event == STREAM_OPENED)
+        fprintf(stderr, "Handling stream_opened callback\n");
+      else
+        fprintf(stderr, "Handling stream_NETWORK_RECOVERED callback\n");
       for (int i = 0; i < conn_tcpls_l->size; i++) {
         conn_tcpls = list_get(conn_tcpls_l, i);
         if (conn_tcpls->tcpls == tcpls && conn_tcpls->transportid == transportid) {
@@ -192,7 +205,11 @@ static int handle_stream_event(tcpls_t *tcpls, tcpls_event_t event,
       break;
       /** currently assumes 2 streams */
     case STREAM_CLOSED:
-      fprintf(stderr, "Handling stream_closed callback\n");
+    case STREAM_NETWORK_FAILURE:
+      if (event == STREAM_CLOSED)
+        fprintf(stderr, "Handling stream_closed callback\n");
+      else
+        fprintf(stderr, "Handling stream_network_failure callback\n");
       for (int i = 0; i < conn_tcpls_l->size; i++) {
         conn_tcpls = list_get(conn_tcpls_l, i);
         if (conn_tcpls->transportid == transportid) {
@@ -392,7 +409,9 @@ static int handle_server_multipath_test(list_t *conn_tcpls, int *inputfd, fd_set
   return ret;
 }
 
-static int handle_client_multipath_test(tcpls_t *tcpls, struct cli_data *data) {
+
+
+static int handle_client_transfer_test(tcpls_t *tcpls, int is_multipath_test, struct cli_data *data) {
   /** handshake*/
   int ret;
   ptls_buffer_t recvbuf;
@@ -456,7 +475,7 @@ static int handle_client_multipath_test(tcpls_t *tcpls, struct cli_data *data) {
     fwrite(recvbuf.base, recvbuf.off, 1, mtest);
     recvbuf.off = 0;
 
-    if (received_data >= 41457280  && !has_remigrated) {
+    if (is_multipath_test && received_data >= 41457280  && !has_remigrated) {
       has_remigrated = 1;
       /*struct timeval timeout;*/
       /*timeout.tv_sec = 5;*/
@@ -490,7 +509,7 @@ static int handle_client_multipath_test(tcpls_t *tcpls, struct cli_data *data) {
       }
     }
     /** We test a migration */
-    if (received_data >= 21457280 && !has_migrated) {
+    if (is_multipath_test && received_data >= 21457280 && !has_migrated) {
       has_migrated = 1;
       int socket = 0;
       connect_info_t *con = NULL;
@@ -582,18 +601,24 @@ static int handle_client_connection(tcpls_t *tcpls, struct cli_data *data,
       else
         printf("TEST 0-RTT: FAILURE\n");
       break;
+    case T_SIMPLE_TRANSFER:
     case T_MULTIPATH:
       {
         struct timeval timeout;
         timeout.tv_sec = 5;
         timeout.tv_usec = 0;
-        tcpls->enable_multipath = 1;
+       
         int err = tcpls_connect(tcpls->tls, NULL, NULL, &timeout);
         if (err){
           fprintf(stderr, "tcpls_connect failed with err %d\n", err);
           return 1;
         }
-        ret = handle_client_multipath_test(tcpls, data);
+        if (test == T_MULTIPATH){
+          tcpls->enable_multipath = 1;
+          ret = handle_client_transfer_test(tcpls, 1, data);
+        }
+        else
+          ret = handle_client_transfer_test(tcpls, 0, data);
       }
       break;
     case T_NOTEST:
@@ -957,6 +982,7 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
       }
       int ret;
       switch (test) {
+        case T_SIMPLE_TRANSFER:
         case T_MULTIPATH:
           assert(input_file);
           if (!inputfd && (inputfd = open(input_file, O_RDONLY)) == -1) {
@@ -1258,6 +1284,8 @@ int main(int argc, char **argv)
                   test = T_ZERO_RTT_HANDSHAKE;
                 else if (strcasecmp(optarg, "simple_handshake") == 0)
                   test = T_SIMPLE_HANDSHAKE;
+                else if (strcasecmp(optarg, "simple_transfer") == 0)
+                  test = T_SIMPLE_TRANSFER;
                 else {
                   fprintf(stderr, "Unknown integration test: %s\n", optarg);
                   exit(1);

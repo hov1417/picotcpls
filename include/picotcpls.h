@@ -59,6 +59,8 @@ typedef enum tcpls_event_t {
   CONN_OPENED,
   STREAM_CLOSED,
   STREAM_OPENED,
+  STREAM_NETWORK_FAILURE,
+  STREAM_NETWORK_RECOVERED,
   /* tells the app that we may have an address to add */
   ADD_ADDR,
   /* tells the app that we added an address! */
@@ -250,6 +252,8 @@ struct st_tcpls_t {
   unsigned int enable_multipath: 1;
   /** Are we recovering from a network failure? */
   unsigned int failover_recovering : 1;
+  /** nbr of FAILOVER_END that we remain to see */
+  int nbr_remaining_failover_end;
   /* tells ptls_send on which con we expect to send encrypted bytes*/
   connect_info_t *sending_con;
   /** carry a list of tcpls_option_t */
