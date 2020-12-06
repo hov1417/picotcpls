@@ -624,7 +624,6 @@ int tcpls_handshake(ptls_t *tls, ptls_handshake_properties_t *properties) {
         }
       }
       else {
-        fprintf(stderr, "Sending %lu bytes\n", sendbuf.off);
         if ((ret = send(sock, sendbuf.base+rret, sendbuf.off-rret, 0)) < 0) {
           perror("send(2) failed");
           goto Exit;
@@ -1151,7 +1150,6 @@ int tcpls_send(ptls_t *tls, streamid_t streamid, const void *input, size_t nbyte
     stream->need_sending_attach_event = 0;
     stream->stream_usable = 1;
     tcpls->sending_con = con;
-
     uint8_t input[8];
     /** send the stream id to the peer */
     uint32_t peer_transportid = 0;
@@ -1262,6 +1260,7 @@ int tcpls_receive(ptls_t *tls, ptls_buffer_t *decryptbuf, struct timeval *tv) {
       ret = recv(con->socket, input, PTLS_MAX_ENCRYPTED_RECORD_SIZE, 0);
       if (ret <= 0) {
         if ((errno == ECONNRESET || errno == EPIPE) && tcpls->enable_failover) {
+          //XXX check whether we have to close the con
           initiate_recovering(tcpls, con);
         }
         else {
@@ -2335,7 +2334,8 @@ int handle_tcpls_data_record(ptls_t *tls, struct st_ptls_record_t *rec)
       ret = 1;
     }
   }
-  send_ack_if_needed(tcpls, stream);
+  if (stream->stream_usable)
+    send_ack_if_needed(tcpls, stream);
 Exit:
   return ret;
 }
@@ -2762,7 +2762,7 @@ static int send_ack_if_needed(tcpls_t *tcpls, tcpls_stream_t *stream) {
     for (int i = 0; i < tcpls->streams->size; i++) {
       stream = list_get(tcpls->streams, i);
       con = connection_get(tcpls, stream->transportid);
-      if (con->state == JOINED && is_ack_needed(tcpls, stream)) {
+      if (con->state == JOINED && stream->stream_usable && is_ack_needed(tcpls, stream)) {
           if (send_ack_if_needed__do(tcpls, stream))
             return -1;
       }
@@ -2948,6 +2948,8 @@ static tcpls_stream_t *stream_new(ptls_t *tls, streamid_t streamid,
   stream->orcon_transportid = con->this_transportid;
   stream->sendbuf = malloc(sizeof(ptls_buffer_t));
   ptls_buffer_init(stream->sendbuf, "", 0);
+  if (tls->tcpls->enable_failover)
+    stream->send_queue = tcpls_record_queue_new(2000);
   if (ptls_handshake_is_complete(tls)) {
   /** Now derive a correct aead context for this stream */
     new_stream_derive_aead_context(tls, stream, is_ours);
