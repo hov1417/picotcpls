@@ -70,6 +70,7 @@ typedef enum tcpls_event_t {
 
 typedef enum tcpls_tcp_state_t {
   CLOSED,
+  FAILED, /*This con encountered a network failure */
   CONNECTING,
   CONNECTED,
   JOINED
@@ -100,19 +101,13 @@ typedef struct st_tcpls_v6_addr_t {
 typedef struct st_connect_info_t {
   tcpls_tcp_state_t state; /* Connection state */
   int socket;
-  /** Fragmentation buffer for TCPLS control records received over this socket
-   * */
+  /**
+   * Fragmentation buffer for TCPLS control records received over this
+   * connection
+   **/
   ptls_buffer_t *buffrag;
-
-  /* Per connection sending buffer */
-  ptls_buffer_t *sendbuf;
-
-  /* Used for retaining records that have not been acknowledged yet */
-  tcpls_record_fifo_t *send_queue;
   /** Last seq number received */
   uint32_t last_seq_received;
-  /** Tells for which transport id conn we are actually recovering data */
-  uint32_t received_recovering_for;
   /** nbr bytes received since the last ackknowledgment sent */
   uint32_t nbr_bytes_received;
   /** nbr records received on this con since the last ack sent */
@@ -121,11 +116,6 @@ typedef struct st_connect_info_t {
   uint64_t tot_data_bytes_received;
   /** total number of CONTROL bytess received over this con */
   uint64_t tot_control_bytes_received;
-  /** for sending buffer */
-  int send_start;
-  /** end positio of the stream control event message in the current sending
-   * buffer*/
-  int send_stream_attach_in_sendbuf_pos;
   /** Id given for this connection */
   uint32_t this_transportid;
   /** Id of the peer fort this connection */
@@ -154,9 +144,6 @@ typedef struct st_connect_info_t {
 typedef struct st_tcpls_stream {
   
   streamid_t streamid;
-  /* Per stream fragmentation buffer -- temporaly removed */
-  //ptls_buffer_t *streambuffrag;
-
   /** when this stream should first send an attach event before
    * sending any packet */
   unsigned need_sending_attach_event  : 1;
@@ -183,6 +170,23 @@ typedef struct st_tcpls_stream {
   ptls_aead_context_t *aead_enc;
   /* Context for decryption */
   ptls_aead_context_t *aead_dec;
+  /* Used for retaining records that have not been acknowledged yet */
+  tcpls_record_fifo_t *send_queue;
+  /* The last sequence number whom which we decrypted and processed some data
+   * from that stream */
+  uint32_t last_seq_received;
+  /* Number of records received on this stream since the last acknowledgement sent */
+  uint32_t nbr_records_since_last_ack;
+  /* Number of bytes received on this stream since the last acknowledgement sent */
+  uint32_t nbr_bytes_since_last_ack;
+
+  /* Per stream sending buffer */
+  ptls_buffer_t *sendbuf;
+  /** for sending buffer */
+  int send_start;
+  /** end position of the stream control event message in the current sending
+   * buffer*/
+  int send_stream_attach_in_sendbuf_pos;
   /** Attached connection -- must be the index of the connection within
    * tcpls->connect_infos
    **/
@@ -197,6 +201,9 @@ typedef struct st_tcpls_stream {
    *buffer for this stream (last_seq_poped+1 is expected to be the next one in sendbuf if one is)
    *We use this information within a FAILOVER message to tell the peer which number is expected to
    *decrypt correctly */
+
+  unsigned int failover_end_sent : 1;
+  unsigned int failover_end_received : 1;
   uint32_t last_seq_poped;
 } tcpls_stream_t;
 
@@ -205,12 +212,14 @@ struct st_tcpls_t {
   ptls_t *tls;
   /* Sending buffer */
   ptls_buffer_t *sendbuf;
-  
   /** If we did not manage to empty sendbuf in one send call */
   int send_start;
-
   /* Receiving buffer */
   ptls_buffer_t *recvbuf;
+  /**
+   * Fragmentation buffer for TCPLS -- used when no streams are attached yet
+   * */
+  ptls_buffer_t *buffrag;
   /* Record buffer for multipath reordering */
   ptls_buffer_t *rec_reordering;
   /** A priority queue to handle reording records */
@@ -256,6 +265,8 @@ struct st_tcpls_t {
   int nbr_remaining_failover_end;
   /* tells ptls_send on which con we expect to send encrypted bytes*/
   connect_info_t *sending_con;
+  /* tells ptls_send on which stream we send encrypted bytes */
+  tcpls_stream_t *sending_stream;
   /** carry a list of tcpls_option_t */
   list_t *tcpls_options;
   /** Should contain all streams */
@@ -360,7 +371,7 @@ connect_info_t *connection_get(tcpls_t *tcpls, uint32_t transportid);
 
 int is_varlen(tcpls_enum_t message);
 
-int is_handshake_tcpls_message(tcpls_enum_t message);
+int is_handshake_or_stream_tcpls_message(tcpls_enum_t message);
 
 int is_failover_valid_message(uint8_t type, tcpls_enum_t message);
 

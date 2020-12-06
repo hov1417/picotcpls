@@ -31,6 +31,7 @@
 #include <getopt.h>
 #include <inttypes.h>
 #include <netinet/tcp.h>
+#include <signal.h>
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>
@@ -103,6 +104,13 @@ struct cli_data {
 };
 
 static struct tcpls_options tcpls_options;
+
+
+static void sig_handler(int signo) {
+  if (signo == SIGPIPE) {
+    fprintf(stderr, "Catching a SIGPIPE error\n");
+  }
+}
 
 static struct timeval timediff(struct timeval *t_current, struct timeval *t_init) {
   struct timeval diff;
@@ -212,7 +220,7 @@ static int handle_stream_event(tcpls_t *tcpls, tcpls_event_t event,
         fprintf(stderr, "Handling stream_network_failure callback\n");
       for (int i = 0; i < conn_tcpls_l->size; i++) {
         conn_tcpls = list_get(conn_tcpls_l, i);
-        if (conn_tcpls->transportid == transportid) {
+        if (tcpls == conn_tcpls->tcpls && conn_tcpls->transportid == transportid) {
           fprintf(stderr, "Woh! we're stopping to write on the connection linked to transportid %d\n", transportid);
           conn_tcpls->wants_to_write = 0;
           conn_tcpls->is_primary = 0;
@@ -617,8 +625,11 @@ static int handle_client_connection(tcpls_t *tcpls, struct cli_data *data,
           tcpls->enable_multipath = 1;
           ret = handle_client_transfer_test(tcpls, 1, data);
         }
-        else
+        else {
+          if (tcpls->enable_failover)
+            tcpls->enable_multipath = 1;
           ret = handle_client_transfer_test(tcpls, 0, data);
+        }
       }
       break;
     case T_NOTEST:
@@ -961,13 +972,13 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
           else {
             fprintf(stderr, "Accepting a new connection\n");
             tcpls_t *new_tcpls = tcpls_new(ctx,  1);
-            new_tcpls->enable_failover = 1;
+            new_tcpls->enable_failover = 0;
             struct conn_to_tcpls conntcpls;
             memset(&conntcpls, 0, sizeof(conntcpls));
             conntcpls.conn_fd = new_conn;
             conntcpls.wants_to_write = 0;
             conntcpls.tcpls = new_tcpls;
-            if (test == T_MULTIPATH)
+            if (test == T_MULTIPATH || new_tcpls->enable_failover)
               conntcpls.tcpls->enable_multipath =1;
             list_add(tcpls_l, new_tcpls);
             /** ADD our ips  -- This might worth to be ctx and instance-based?*/
@@ -1044,7 +1055,8 @@ static int run_client(struct sockaddr_storage *sa_our, struct sockaddr_storage
   tcpls_t *tcpls = tcpls_new(ctx, 0);
   tcpls_add_ips(tcpls, sa_our, sa_peer, nbr_our, nbr_peer);
   ctx->output_decrypted_tcpls_data = 0;
-  tcpls->enable_failover = 1;
+  tcpls->enable_failover = 0;
+  signal(SIGPIPE, sig_handler);
 
   if (ctx->support_tcpls_options) {
     int ret = handle_client_connection(tcpls, &data, test);

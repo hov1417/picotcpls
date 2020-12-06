@@ -364,8 +364,8 @@ int buffer_push_encrypted_records(ptls_t *tls, streamid_t streamid, ptls_buffer_
         /** XXX refactor to a function to format the tcpls header */
         size_t chunk_size = len;
         int  mpseq = 0;
-        if (tls->tcpls && tls->tcpls->enable_multipath && (type ==
-              PTLS_CONTENT_TYPE_TCPLS_DATA || is_varlen(tcpls_message))) {
+        if ((tls->tcpls && tls->tcpls->enable_multipath && (type ==
+              PTLS_CONTENT_TYPE_TCPLS_DATA || is_varlen(tcpls_message)))) {
           /** header multipath  -- just a sequence number*/
           mpseq = tls->tcpls->send_mpseq++;
           memcpy(tcpls_header, &mpseq, sizeof(mpseq));
@@ -377,24 +377,23 @@ int buffer_push_encrypted_records(ptls_t *tls, streamid_t streamid, ptls_buffer_
         if (chunk_size > PTLS_MAX_PLAINTEXT_RECORD_SIZE-tcpls_header_size)
             chunk_size = PTLS_MAX_PLAINTEXT_RECORD_SIZE-tcpls_header_size;
         buffer_push_record(buf, PTLS_CONTENT_TYPE_APPDATA, {
-            if ((ret = ptls_buffer_reserve(buf, chunk_size + ctx->algo->tag_size + tcpls_header_size + 1 )) != 0)
+            if ((ret = ptls_buffer_reserve(buf, chunk_size + ctx->algo->tag_size + tcpls_header_size + 1)) != 0)
                 goto Exit;
             buf->off += aead_encrypt(ctx, buf->base + buf->off, src, chunk_size,
                 tcpls_header, tcpls_header_size, type);
 
-            /* tcpls message sent during the handshake are not sent over a
-             * stream
-             *
-             * Cover messages that can be sent only during initial handshake and
+            /**
+             * tcpls message sent during the handshake are not sent over a
+             * stream. It covers messages that can be sent only during initial handshake and
              * mpjoin handshake
              *
              **/
-            if (tls->tcpls && tls->tcpls->enable_failover && !ptls_handshake_is_complete(tls) &&
-                !is_handshake_tcpls_message(tcpls_message)) {
+            if (tls->tcpls && tls->tcpls->enable_failover && ptls_handshake_is_complete(tls) &&
+                !is_handshake_or_stream_tcpls_message(tcpls_message)) {
               assert(tls->tcpls->sending_con);
               // push seq and record size
-              queue_ret_t ret = tcpls_record_queue_push(tls->tcpls->sending_con->send_queue,
-                  mpseq, streamid, (uint32_t) ctx->seq, chunk_size+ctx->algo->tag_size+tcpls_header_size+1);
+              queue_ret_t ret = tcpls_record_queue_push(tls->tcpls->sending_stream->send_queue,
+                  (uint32_t) ctx->seq-1, chunk_size+ctx->algo->tag_size+tcpls_header_size+1+5);
               if (ret == MEMORY_FULL)
                 return PTLS_ERROR_NO_MEMORY;
             }
@@ -4764,7 +4763,8 @@ int ptls_receive(ptls_t *tls, ptls_buffer_t *decryptbuf, ptls_buffer_t
     while (ret == 0 && input != end && decryptbuf_orig_size == decryptbuf->off) {
         size_t consumed = end - input;
         ret = handle_input(tls, NULL, decryptbuf, buffrag, input, &consumed, NULL);
-        input += consumed;
+        if (ret != PTLS_ALERT_BAD_RECORD_MAC)
+          input += consumed;
 
         switch (ret) {
         case 0:

@@ -1216,7 +1216,7 @@ static void test_sends_varlen_bpf_prog(void)
   server = tcpls_server->tls;
   connect_info_t con;
   memset(&con, 0, sizeof(con));
-  con.this_transportid = 42;
+  con.state = JOINED;
   list_add(tcpls_client->connect_infos, &con);
   tcpls_client->socket_rcv = 0;
   tcpls_server->socket_rcv = 0;
@@ -1243,9 +1243,12 @@ static void test_sends_varlen_bpf_prog(void)
   inet_pton(AF_INET, "192.168.1.1", &addr.sin_addr);
   addr.sin_family = AF_INET;
   ok(tcpls_add_v4(tcpls_server->tls, &addr, 1, 0, 0) == 0);
-  streamid_t streamid = tcpls_stream_new(server, NULL, (struct sockaddr*) &addr);
-
   ptls_buffer_init(&decbuf, "", 0);
+  streamid_t streamid = tcpls_stream_new(server, NULL, (struct sockaddr*) &addr);
+  ok(tcpls_streams_attach(server, 0, 0) == 0);
+  consumed = tcpls_server->sendbuf->off;
+  ret = ptls_receive(client, &decbuf, NULL, tcpls_server->sendbuf->base, &consumed);
+  ok(ret==0);
   ptls_buffer_dispose(&sbuf);
   uint8_t input[50000];
   memset(input, 0, 50000);
@@ -1254,10 +1257,11 @@ static void test_sends_varlen_bpf_prog(void)
   ok(ret == 0);
   ret = tcpls_send_tcpoption(tcpls_server, streamid, BPF_CC);
   ok(ret == 0);
-  connect_info_t *cons = connection_get(tcpls_server, 0);
-  consumed = cons->sendbuf->off;
+  tcpls_stream_t *stream = stream_get(tcpls_server, streamid);
+  consumed = stream->sendbuf->off;
   tcpls_client->socket_rcv = con.socket;
-  ret = ptls_receive(client, &decbuf, NULL, cons->sendbuf->base, &consumed);
+  tcpls_client->streamid_rcv = streamid;
+  ret = ptls_receive(client, &decbuf, NULL, stream->sendbuf->base, &consumed);
   ok(ret == 0);
   /** Check the length of the received option */
   tcpls_options_t *option;
@@ -1376,11 +1380,12 @@ static void test_sends_tcpls_record(void)
   client = tcpls_client->tls;
   server = tcpls_server->tls;
   
-  /*connect_info_t con;*/
-  /*memset(&con, 0, sizeof(con));*/
+  connect_info_t con;
+  memset(&con, 0, sizeof(con));
+  con.state = JOINED;
   /*con.this_transportid = 42;*/
   /*list_add(tcpls_client->connect_infos, &con);*/
-  /*list_add(tcpls_server->connect_infos, &con);*/
+  list_add(tcpls_server->connect_infos, &con);
   tcpls_client->socket_rcv = 0;
   tcpls_server->socket_rcv = 0;
 
@@ -1413,11 +1418,17 @@ static void test_sends_tcpls_record(void)
   addr.sin_family = AF_INET;
   ok(tcpls_add_v4(tcpls_client->tls, &addr, 1, 0, 0) == 0);
   streamid_t streamid = tcpls_stream_new(client, NULL, (struct sockaddr*) &addr);
+  ok(tcpls_streams_attach(client, 0, 0) == 0);
+  consumed = tcpls_client->sendbuf->off;
+  ret = ptls_receive(server, &decbuf, NULL, tcpls_client->sendbuf->base, &consumed);
+  ok(ret==0);
   ret = tcpls_send_tcpoption(tcpls_client, streamid, USER_TIMEOUT);
-  connect_info_t *con = connection_get(tcpls_client, 0);
-  consumed = con->sendbuf->off;
+  tcpls_stream_t *stream = stream_get(tcpls_client, streamid);
+  ok(stream != NULL);
+  consumed = stream->sendbuf->off;
   ok(ret == 0);
-  ret = ptls_receive(server, &decbuf, NULL, con->sendbuf->base, &consumed);
+  tcpls_server->streamid_rcv = streamid;
+  ret = ptls_receive(server, &decbuf, NULL, stream->sendbuf->base, &consumed);
   ok(ret==0);
   decbuf.off = 0;
   cbuf.off = 0;
@@ -2310,16 +2321,16 @@ ok(r_fifo->size == 0);
 ok(r_fifo->max_record_num == 3);
 struct st_ptls_record_t rec;
 memset(&rec, 0, sizeof(rec));
-ok(tcpls_record_queue_push(r_fifo, 0, 1, 0, 10) == OK);
-ok(tcpls_record_queue_push(r_fifo, 1, 1, 1, 10) == OK);
+ok(tcpls_record_queue_push(r_fifo, 0, 1) == OK);
+ok(tcpls_record_queue_push(r_fifo, 1, 1) == OK);
 ok(tcpls_record_queue_seq(r_fifo) == 0);
-ok(tcpls_record_queue_push(r_fifo, 2, 1, 2, 10) == OK);
+ok(tcpls_record_queue_push(r_fifo, 2, 1) == OK);
 ok(r_fifo->front_idx == 0);
 ok(tcpls_record_queue_del(r_fifo, 1) == OK);
 ok(tcpls_record_queue_seq(r_fifo) == 1);
 ok(tcpls_record_queue_del(r_fifo, 2) == OK);
 ok(tcpls_record_queue_del(r_fifo, 1) == EMPTY);
-ok(tcpls_record_queue_push(r_fifo, 4, 1, 3, 10) == OK);
+ok(tcpls_record_queue_push(r_fifo, 4, 1) == OK);
 ok(tcpls_record_queue_del(r_fifo, 1) == OK);
 ok(r_fifo->front_idx == r_fifo->back_idx);
 tcpls_record_fifo_free(r_fifo);
