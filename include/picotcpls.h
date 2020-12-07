@@ -56,6 +56,7 @@ typedef enum tcpls_enum_t {
 
 typedef enum tcpls_event_t {
   CONN_CLOSED,
+  CONN_FAILED,
   CONN_OPENED,
   STREAM_CLOSED,
   STREAM_OPENED,
@@ -371,7 +372,7 @@ connect_info_t *connection_get(tcpls_t *tcpls, uint32_t transportid);
 
 int is_varlen(tcpls_enum_t message);
 
-int is_handshake_or_stream_tcpls_message(tcpls_enum_t message);
+int is_handshake_tcpls_message(tcpls_enum_t message);
 
 int is_failover_valid_message(uint8_t type, tcpls_enum_t message);
 

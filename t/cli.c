@@ -88,6 +88,7 @@ struct tcpls_options {
 };
 
 struct conn_to_tcpls {
+  int state;
   int conn_fd;
   int transportid;
   unsigned int is_primary : 1;
@@ -171,19 +172,19 @@ static int handle_client_stream_event(tcpls_t *tcpls, tcpls_event_t event, strea
   struct cli_data *data = (struct cli_data*) cbdata;
   switch (event) {
     case STREAM_NETWORK_RECOVERED:
-      fprintf(stderr, "Handling stream_network_recovered callback\n");
+      fprintf(stderr, "Handling STREAM_NETWORK_RECOVERED callback\n");
       list_add(data->streamlist, &streamid);
       break;
     case STREAM_OPENED:
-      fprintf(stderr, "Handling stream_opened callback\n");
+      fprintf(stderr, "Handling STREAM_OPENED callback\n");
       list_add(data->streamlist, &streamid);
       break;
     case STREAM_NETWORK_FAILURE:
-      fprintf(stderr, "Handling stream_network_failure callback, removing stream %u\n", streamid);
+      fprintf(stderr, "Handling STREAM_NETWORK_FAILURE callback, removing stream %u\n", streamid);
       list_remove(data->streamlist, &streamid);
       break;
     case STREAM_CLOSED:
-      fprintf(stderr, "Handling stream_closed callback, removing stream %u\n", streamid);
+      fprintf(stderr, "Handling STREAM_CLOSED callback, removing stream %u\n", streamid);
       list_remove(data->streamlist, &streamid);
       break;
     default: break;
@@ -198,9 +199,9 @@ static int handle_stream_event(tcpls_t *tcpls, tcpls_event_t event,
     case STREAM_OPENED:
     case STREAM_NETWORK_RECOVERED:
       if (event == STREAM_OPENED)
-        fprintf(stderr, "Handling stream_opened callback\n");
+        fprintf(stderr, "Handling STREAM_OPENED callback\n");
       else
-        fprintf(stderr, "Handling stream_NETWORK_RECOVERED callback\n");
+        fprintf(stderr, "Handling STREAM_NETWORK_RECOVERED callback\n");
       for (int i = 0; i < conn_tcpls_l->size; i++) {
         conn_tcpls = list_get(conn_tcpls_l, i);
         if (conn_tcpls->tcpls == tcpls && conn_tcpls->transportid == transportid) {
@@ -215,9 +216,9 @@ static int handle_stream_event(tcpls_t *tcpls, tcpls_event_t event,
     case STREAM_CLOSED:
     case STREAM_NETWORK_FAILURE:
       if (event == STREAM_CLOSED)
-        fprintf(stderr, "Handling stream_closed callback\n");
+        fprintf(stderr, "Handling STREAM_CLOSED callback\n");
       else
-        fprintf(stderr, "Handling stream_network_failure callback\n");
+        fprintf(stderr, "Handling STREAM_NETWORK_FAILURE callback\n");
       for (int i = 0; i < conn_tcpls_l->size; i++) {
         conn_tcpls = list_get(conn_tcpls_l, i);
         if (tcpls == conn_tcpls->tcpls && conn_tcpls->transportid == transportid) {
@@ -234,6 +235,9 @@ static int handle_stream_event(tcpls_t *tcpls, tcpls_event_t event,
 static int handle_client_connection_event(tcpls_event_t event, int socket, int transportid, void *cbdata) {
   struct cli_data *data = (struct cli_data*) cbdata;
   switch (event) {
+    case CONN_FAILED:
+      fprintf(stderr, "Received a CONN_FAILED\n");
+      break;
     case CONN_CLOSED:
       fprintf(stderr, "Received a CONN_CLOSED; marking socket %d to remove\n", socket);
       list_add(data->socktoremove, &socket);
@@ -250,6 +254,19 @@ static int handle_client_connection_event(tcpls_event_t event, int socket, int t
 static int handle_connection_event(tcpls_event_t event, int socket, int transportid, void *cbdata) {
   list_t *conntcpls = (list_t*) cbdata;
   switch (event) {
+    case CONN_FAILED:
+      {
+        fprintf(stderr, "Received a CONN_FAILED\n");
+        struct conn_to_tcpls *ctcpls;
+        for (int i = 0; i < conntcpls->size; i++) {
+          ctcpls = list_get(conntcpls, i);
+          if (ctcpls->conn_fd == socket) {
+            ctcpls->state = FAILED;
+            break;
+          }
+        }
+      }
+      break;
     case CONN_OPENED:
       {
         fprintf(stderr, "Received a CONN_OPENED; adding transportid %d to the socket %d\n", transportid, socket);
@@ -258,6 +275,7 @@ static int handle_connection_event(tcpls_event_t event, int socket, int transpor
           ctcpls = list_get(conntcpls, i);
           if (ctcpls->conn_fd == socket) {
             ctcpls->transportid = transportid;
+            ctcpls->state = CONNECTED;
             break;
           }
         }
@@ -271,6 +289,7 @@ static int handle_connection_event(tcpls_event_t event, int socket, int transpor
           ctcpls = list_get(conntcpls, i);
           if (ctcpls->conn_fd == socket) {
             ctcpls->to_remove = 1;
+            ctcpls->state = CLOSED;
             break;
           }
         }
@@ -950,11 +969,13 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
          * they want to write */
         for (int i = 0; i < conn_tcpls->size; i++) {
           conn = list_get(conn_tcpls, i);
-          FD_SET(conn->conn_fd, &readset);
-          if (conn->wants_to_write)
-            FD_SET(conn->conn_fd, &writeset);
-          if (maxfd < conn->conn_fd)
-            maxfd = conn->conn_fd;
+          if (conn->state == CONNECTED) {
+            FD_SET(conn->conn_fd , &readset);
+            if (conn->wants_to_write)
+              FD_SET(conn->conn_fd, &writeset);
+            if (maxfd < conn->conn_fd)
+              maxfd = conn->conn_fd;
+          }
         }
         /*fprintf(stderr, "waiting for connection or r/w event...\n");*/
       } while (select(maxfd+1, &readset, &writeset, NULL, &timeout) == -1);

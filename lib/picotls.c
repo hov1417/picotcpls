@@ -353,7 +353,7 @@ static int aead_decrypt(ptls_aead_context_t *ctx,
 
 #endif /* #if PTLS_FUZZ_HANDSHAKE */
 
-
+//XXX FIXME function signature
 int buffer_push_encrypted_records(ptls_t *tls, streamid_t streamid, ptls_buffer_t *buf, uint8_t type, tcpls_enum_t tcpls_message,
     const uint8_t *src, size_t len, ptls_aead_context_t *ctx)
 {
@@ -388,9 +388,8 @@ int buffer_push_encrypted_records(ptls_t *tls, streamid_t streamid, ptls_buffer_
              * mpjoin handshake
              *
              **/
-            if (tls->tcpls && tls->tcpls->enable_failover && ptls_handshake_is_complete(tls) &&
-                !is_handshake_or_stream_tcpls_message(tcpls_message)) {
-              assert(tls->tcpls->sending_con);
+            if (tls->tcpls && tls->tcpls->sending_stream && tls->tcpls->enable_failover && ptls_handshake_is_complete(tls) &&
+                !is_handshake_tcpls_message(tcpls_message)) {
               // push seq and record size
               queue_ret_t ret = tcpls_record_queue_push(tls->tcpls->sending_stream->send_queue,
                   (uint32_t) ctx->seq-1, chunk_size+ctx->algo->tag_size+tcpls_header_size+1+5);
@@ -3203,8 +3202,10 @@ static int decode_client_hello(ptls_t *tls, struct st_ptls_client_hello_t *ch,
             src += len;
           });
           assert(properties->received_mpjoin_to_process);
-          if (properties->received_mpjoin_to_process(properties->socket, connid, cookie, transportid, tls->ctx->cb_data))
+          if (properties->received_mpjoin_to_process(properties->socket, connid, cookie, transportid, tls->ctx->cb_data)) {
+            ret = PTLS_ALERT_BAD_MPJOIN;
             goto Exit;
+          }
         } break;
         case PTLS_EXTENSION_TYPE_PRE_SHARED_KEY: {
             size_t num_identities = 0;
