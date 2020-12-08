@@ -1261,8 +1261,11 @@ static void test_sends_varlen_bpf_prog(void)
   consumed = stream->sendbuf->off;
   tcpls_client->socket_rcv = con.socket;
   tcpls_client->streamid_rcv = streamid;
+  ptls_aead_context_t *rememberctx = client->traffic_protection.dec.aead;
+  client->traffic_protection.dec.aead = ((tcpls_stream_t *) list_get(tcpls_client->streams, 0))->aead_dec;
   ret = ptls_receive(client, &decbuf, NULL, stream->sendbuf->base, &consumed);
   ok(ret == 0);
+  client->traffic_protection.dec.aead = rememberctx;
   /** Check the length of the received option */
   tcpls_options_t *option;
   int found = 0;
@@ -1428,7 +1431,10 @@ static void test_sends_tcpls_record(void)
   consumed = stream->sendbuf->off;
   ok(ret == 0);
   tcpls_server->streamid_rcv = streamid;
+  ptls_aead_context_t *rememberctx = server->traffic_protection.dec.aead;
+  server->traffic_protection.dec.aead = ((tcpls_stream_t * ) stream_get(tcpls_server, 1))->aead_dec;
   ret = ptls_receive(server, &decbuf, NULL, stream->sendbuf->base, &consumed);
+  server->traffic_protection.dec.aead = rememberctx;
   ok(ret==0);
   decbuf.off = 0;
   cbuf.off = 0;
