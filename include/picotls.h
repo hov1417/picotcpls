@@ -241,7 +241,8 @@ extern "C" {
 
   /** Server to client encrypted extension  */
 #define PTLS_EXTENSION_TYPE_ENCRYPTED_TCP_OPTIONS 100
-  /** Define TCP extensions to be used as TLS extensions during the handshake */
+  /** Define TCP extensions to be used as TLS extensions during the handshake 
+   * Using values over 64 won't oblige us to pass the allowed extension madness*/
 #define PTLS_EXTENSION_TYPE_ENCRYPTED_TCP_OPTIONS_USERTIMEOUT 101
 #define PTLS_EXTENSION_TYPE_ENCRYPTED_MULTIHOMING_v4 102
 #define PTLS_EXTENSION_TYPE_ENCRYPTED_MULTIHOMING_v6 103

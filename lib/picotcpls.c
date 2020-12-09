@@ -112,96 +112,96 @@ static int try_decrypt_with_multistreams(tcpls_t *tcpls, const void *input, ptls
 * Create a new TCPLS object
 */
 void *tcpls_new(void *ctx, int is_server) {
-ptls_t *tls;
-ptls_context_t *ptls_ctx = (ptls_context_t *) ctx;
-tcpls_t *tcpls  = malloc(sizeof(*tcpls));
-if (tcpls == NULL)
-  return NULL;
-memset(tcpls, 0, sizeof(*tcpls));
-tcpls->cookies = new_list(COOKIE_LEN, 4);
-if (is_server) {
-  tls = ptls_server_new(ptls_ctx);
-  tcpls->next_stream_id = 2147483649;  // 2**31 +1
-  /** Generate connid and cookie */
-  ptls_ctx->random_bytes(tcpls->connid, CONNID_LEN);
-  uint8_t rand_cookies[COOKIE_LEN];
-  for (int i = 0; i < 4; i++) {
-    ptls_ctx->random_bytes(rand_cookies, COOKIE_LEN);
-    list_add(tcpls->cookies, rand_cookies);
+  ptls_t *tls;
+  ptls_context_t *ptls_ctx = (ptls_context_t *) ctx;
+  tcpls_t *tcpls  = malloc(sizeof(*tcpls));
+  if (tcpls == NULL)
+    return NULL;
+  memset(tcpls, 0, sizeof(*tcpls));
+  tcpls->cookies = new_list(COOKIE_LEN, 4);
+  if (is_server) {
+    tls = ptls_server_new(ptls_ctx);
+    tcpls->next_stream_id = 2147483649;  // 2**31 +1
+    /** Generate connid and cookie */
+    ptls_ctx->random_bytes(tcpls->connid, CONNID_LEN);
+    uint8_t rand_cookies[COOKIE_LEN];
+    for (int i = 0; i < 4; i++) {
+      ptls_ctx->random_bytes(rand_cookies, COOKIE_LEN);
+      list_add(tcpls->cookies, rand_cookies);
+    }
   }
-}
-else {
-  tls = ptls_client_new(ptls_ctx);
-  tcpls->next_stream_id = 1;
-}
-// init tcpls stuffs
-tcpls->sendbuf = malloc(sizeof(*tcpls->sendbuf));
-tcpls->recvbuf = malloc(sizeof(*tcpls->recvbuf));
-tcpls->rec_reordering = malloc(sizeof(*tcpls->rec_reordering));
-tcpls->buffrag = malloc(sizeof(*tcpls->buffrag));
-tcpls->tls = tls;
-ptls_buffer_init(tcpls->sendbuf, "", 0);
-ptls_buffer_init(tcpls->recvbuf, "", 0);
-ptls_buffer_init(tcpls->rec_reordering, "", 0);
-/** From the heap API, a NULL cmp function compares keys as integers, which is
- * what we need */
-tcpls->priority_q = malloc(sizeof(*tcpls->priority_q));
-heap_create(tcpls->priority_q, 0, cmp_mpseq);
-tcpls->tcpls_options = new_list(sizeof(tcpls_options_t), NBR_SUPPORTED_TCPLS_OPTIONS);
-tcpls->streams = new_list(sizeof(tcpls_stream_t), 3);
-tcpls->connect_infos = new_list(sizeof(connect_info_t), 2);
-tls->tcpls = tcpls;
-return tcpls;
+  else {
+    tls = ptls_client_new(ptls_ctx);
+    tcpls->next_stream_id = 1;
+  }
+  // init tcpls stuffs
+  tcpls->sendbuf = malloc(sizeof(*tcpls->sendbuf));
+  tcpls->recvbuf = malloc(sizeof(*tcpls->recvbuf));
+  tcpls->rec_reordering = malloc(sizeof(*tcpls->rec_reordering));
+  tcpls->buffrag = malloc(sizeof(*tcpls->buffrag));
+  tcpls->tls = tls;
+  ptls_buffer_init(tcpls->sendbuf, "", 0);
+  ptls_buffer_init(tcpls->recvbuf, "", 0);
+  ptls_buffer_init(tcpls->rec_reordering, "", 0);
+  /** From the heap API, a NULL cmp function compares keys as integers, which is
+   * what we need */
+  tcpls->priority_q = malloc(sizeof(*tcpls->priority_q));
+  heap_create(tcpls->priority_q, 0, cmp_mpseq);
+  tcpls->tcpls_options = new_list(sizeof(tcpls_options_t), NBR_SUPPORTED_TCPLS_OPTIONS);
+  tcpls->streams = new_list(sizeof(tcpls_stream_t), 3);
+  tcpls->connect_infos = new_list(sizeof(connect_info_t), 2);
+  tls->tcpls = tcpls;
+  return tcpls;
 }
 
 
 int static add_v4_to_options(tcpls_t *tcpls, uint8_t n) {
-/** Contains the number of IPs in [0], and then the 32 bits of IPs */
-uint8_t *addresses = malloc(sizeof(struct in_addr)+1);
-if (!addresses)
-  return PTLS_ERROR_NO_MEMORY;
-tcpls_v4_addr_t *current = tcpls->ours_v4_addr_llist;
-if (!current) {
-  return -1;
-}
-int i = 1;
-while (current && i < sizeof(struct in_addr)+1) {
-  memcpy(&addresses[i], &current->addr.sin_addr, sizeof(struct in_addr));
-  i+=sizeof(struct in_addr);
-  current = current->next;
-}
-/** TODO, check what bit ordering to do here */
-addresses[0] = n;
-return tcpls_init_context(tcpls->tls, addresses, sizeof(struct in_addr)+1, MULTIHOMING_v4, 0, 1);
+  /** Contains the number of IPs in [0], and then the 32 bits of IPs */
+  uint8_t *addresses = malloc(n*sizeof(struct in_addr)+1);
+  if (!addresses)
+    return PTLS_ERROR_NO_MEMORY;
+  tcpls_v4_addr_t *current = tcpls->ours_v4_addr_llist;
+  if (!current) {
+    return -1;
+  }
+  int i = 0;
+  while (current && i < n) {
+    memcpy(&addresses[1+i*sizeof(struct in_addr)], &current->addr.sin_addr, sizeof(struct in_addr));
+    i++;
+    current = current->next;
+  }
+  /** TODO, check what bit ordering to do here */
+  addresses[0] = n;
+  return tcpls_init_context(tcpls->tls, addresses, n*sizeof(struct in_addr)+1, MULTIHOMING_v4, 0, 1);
 }
 
 int static add_v6_to_options(tcpls_t *tcpls, uint8_t n) {
-uint8_t *addresses = malloc(sizeof(struct in6_addr)+1);
-if (!addresses)
-  return PTLS_ERROR_NO_MEMORY;
-tcpls_v6_addr_t *current = tcpls->ours_v6_addr_llist;
-if (!current)
-  return -1;
-int i = 1;
-while (current && i < sizeof(struct in6_addr)+1) {
-  memcpy(&addresses[i], &current->addr.sin6_addr.s6_addr, sizeof(struct in6_addr));
-  i+=sizeof(struct in6_addr);
-  current = current->next;
-}
-addresses[0] = n;
-return tcpls_init_context(tcpls->tls, addresses, sizeof(struct in6_addr),
-    MULTIHOMING_v6, 0, 1);
+  uint8_t *addresses = malloc(n*sizeof(struct in6_addr)+1);
+  if (!addresses)
+    return PTLS_ERROR_NO_MEMORY;
+  tcpls_v6_addr_t *current = tcpls->ours_v6_addr_llist;
+  if (!current)
+    return -1;
+  int i = 0;
+  while (current && i < n) {
+    memcpy(&addresses[1+i*sizeof(struct in6_addr)], &current->addr.sin6_addr.s6_addr, sizeof(struct in6_addr));
+    i++;
+    current = current->next;
+  }
+  addresses[0] = n;
+  return tcpls_init_context(tcpls->tls, addresses, n*sizeof(struct in6_addr)+1,
+      MULTIHOMING_v6, 0, 1);
 }
 
 /**
-* Copy Sockaddr_in into our structures. If is_primary is set, flip that bit
-* from any other v4 address if set.
-*
-* if settopeer is enabled, it means that this address is actually ours and meant to
-* be sent to the peer
-*
-* if settopeer is 0, then this address is the peer's one
-*/
+ * Copy Sockaddr_in into our structures. If is_primary is set, flip that bit
+ * from any other v4 address if set.
+ *
+ * if settopeer is enabled, it means that this address is actually ours and meant to
+ * be sent to the peer
+ *
+ * if settopeer is 0, then this address is the peer's one
+ */
 
 int tcpls_add_v4(ptls_t *tls, struct sockaddr_in *addr, int is_primary, int
     settopeer, int is_ours) {
@@ -1679,7 +1679,7 @@ static int send_unacked_data(tcpls_t *tcpls, tcpls_stream_t *stream, connect_inf
  *
  * First try a different address than the one in con_closed. If not other
  * address exist or the connection fails, try to connect again with con_closed.
- * 
+ *
  * returns NULL if nothing worked
  * returns the connect_info_t * that connected or which is already connected
  */
@@ -2155,7 +2155,7 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
           }
         }
         if (!found) {
-          fprintf(stderr, "STREAM_ATTACH to a connection not found. Streamid %u, transport id %d\n", streamid, transportid);
+          fprintf(stdout, "STREAM_ATTACH to a connection not found. Streamid %u, transport id %d\n", streamid, transportid);
           return PTLS_ERROR_CONN_NOT_FOUND;
         }
         /** an absolute number that should not reduce at stream close */

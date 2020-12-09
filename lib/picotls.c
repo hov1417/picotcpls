@@ -118,6 +118,18 @@ static inline void init_extension_bitmap(struct st_ptls_extension_bitmap_t
         /*ALLOW(SERVER_HELLO);*/
         /*ALLOW(ENCRYPTED_EXTENSIONS);*/
     /*});*/
+    EXT(COOKIE, {
+        ALLOW(CLIENT_HELLO);
+        ALLOW(SERVER_HELLO);
+    });
+    /*EXT(ENCRYPTED_COOKIE, {*/
+        /*ALLOW(CLIENT_HELLO);*/
+        /*ALLOW(SERVER_HELLO);*/
+    /*});*/
+    /*EXT(ENCRYPTED_CONNID, {*/
+        /*ALLOW(CLIENT_HELLO);*/
+        /*ALLOW(SERVER_HELLO);*/
+    /*});*/
     EXT(STATUS_REQUEST, {
         ALLOW(CLIENT_HELLO);
         ALLOW(CERTIFICATE);
@@ -148,10 +160,6 @@ static inline void init_extension_bitmap(struct st_ptls_extension_bitmap_t
         ALLOW(CLIENT_HELLO);
         ALLOW(ENCRYPTED_EXTENSIONS);
         ALLOW(NEW_SESSION_TICKET);
-    });
-    EXT(COOKIE, {
-        ALLOW(CLIENT_HELLO);
-        ALLOW(SERVER_HELLO);
     });
     EXT(SUPPORTED_VERSIONS, {
         ALLOW(CLIENT_HELLO);
@@ -3852,18 +3860,12 @@ static int server_handle_hello(ptls_t *tls, ptls_message_emitter_t *emitter, ptl
                 option = list_get(tls->tcpls->tcpls_options, i);
                 if (option->data->base && option->type == USER_TIMEOUT) {
                   buffer_push_extension(sendbuf, PTLS_EXTENSION_TYPE_ENCRYPTED_TCP_OPTIONS_USERTIMEOUT, {
-                    /** FIXME use ptls_buffer_push16 */
                     ptls_buffer_pushv(sendbuf, option->data->base,
                         option->data->len);
                   });
                 }
-              }
-            }
-            if (tls->ctx->support_tcpls_options && tls->ctx->failover && tls->tcpls) {
-              /** Push our others v4 and v6 */
-              for (int i = 0; i < tls->tcpls->tcpls_options->size; i++) {
-                option = list_get(tls->tcpls->tcpls_options, i);
-                if (option->data->base && option->type == MULTIHOMING_v4) {
+                /** Push our others v4 and v6 */
+                else if (option->data->base && option->type == MULTIHOMING_v4) {
                   buffer_push_extension(sendbuf, PTLS_EXTENSION_TYPE_ENCRYPTED_MULTIHOMING_v4, {
                       ptls_buffer_push_block(sendbuf, 2, {
                           ptls_buffer_push_block(sendbuf, 1, {
@@ -3882,7 +3884,6 @@ static int server_handle_hello(ptls_t *tls, ptls_message_emitter_t *emitter, ptl
                   });
                 }
               }
-
             }
             if ((ret = push_additional_extensions(properties, sendbuf)) != 0)
                 goto Exit;

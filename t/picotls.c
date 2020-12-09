@@ -2123,6 +2123,7 @@ static void test_tcpls_addresses(void)
   tcpls_v6_addr_t *peer_v6 = get_addr6_from_sockaddr(tcpls->v6_addr_llist, &addr6);
   assert(peer_v6);
   tcpls_options_t *option;
+  ok(tcpls_server->tcpls_options->size > 0);
   for (int i = 0; i < tcpls_server->tcpls_options->size; i++) {
     option = list_get(tcpls_server->tcpls_options, i);
     ok(option->type == MULTIHOMING_v4 || option->type == MULTIHOMING_v6);
@@ -2134,10 +2135,6 @@ static void test_tcpls_addresses(void)
   ptls_t *client, *server;
   ctx->support_tcpls_options = 1;
   ctx_peer->support_tcpls_options = 1;
-  /** Activate failover  for exchanging addresses */
-  ctx_peer->failover = 1;
-  ctx->failover = 1;
-
   ptls_buffer_t cbuf, sbuf;
   size_t coffs[5] = {0}, soffs[5];
   /*static ptls_on_extension_t cb = {on_extension_cb};*/
@@ -2174,17 +2171,6 @@ static void test_tcpls_addresses(void)
   ok(ret == 0);
   ok(sbuf.off == 0);
   ok(ptls_handshake_is_complete(server));
-
-  /** Check whether we received a correct address */
-  for (int i = 0; i < tcpls->tcpls_options->size; i++) {
-    option = list_get(tcpls->tcpls_options, i);
-    ok(option->type == MULTIHOMING_v4 || option->type == MULTIHOMING_v6);
-    if (option->type == MULTIHOMING_v4) {
-      ok(*(uint8_t*) option->data->base == 2);
-      ok(option->data->len == 2*sizeof(struct in_addr) + 1);
-    }
-  }
-  
   tcpls_v4_addr_t *received_addr = get_addr_from_sockaddr(tcpls->v4_addr_llist, &addr);
   assert(received_addr);
   ok(memcmp(&received_addr->addr, &addr, sizeof(addr)) == 0);
@@ -2211,6 +2197,10 @@ static void test_tcpls_stream_api(void)
   addr.sin_family = AF_INET;
   addr2.sin_port = htons(443);
   addr2.sin_family = AF_INET;
+  connect_info_t con;
+  memset(&con, 0, sizeof(con));
+  con.state = JOINED;
+  list_add(tcpls_server->connect_infos, &con);
   inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
   inet_pton(AF_INET, "192.168.1.1", &addr2.sin_addr);
   ok(tcpls_add_v4(tcpls_server->tls, &addr, 1, 1, 1) == 0);
