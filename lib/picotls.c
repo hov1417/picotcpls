@@ -98,11 +98,11 @@ static inline void init_extension_bitmap(struct st_ptls_extension_bitmap_t
         ALLOW(CLIENT_HELLO);
         ALLOW(ENCRYPTED_EXTENSIONS);
     });
-    /*EXT(ENCRYPTED_TCP_OPTIONS, {*/
-        /*ALLOW(CLIENT_HELLO);*/
-        /*ALLOW(SERVER_HELLO);*/
-        /*ALLOW(ENCRYPTED_EXTENSIONS);*/
-    /*});*/
+    EXT(ENCRYPTED_TCP_OPTIONS, {
+        ALLOW(CLIENT_HELLO);
+        ALLOW(SERVER_HELLO);
+        ALLOW(ENCRYPTED_EXTENSIONS);
+    });
     /*EXT(ENCRYPTED_TCP_OPTIONS_USERTIMEOUT, {*/
         /*ALLOW(CLIENT_HELLO);*/
         /*ALLOW(SERVER_HELLO);*/

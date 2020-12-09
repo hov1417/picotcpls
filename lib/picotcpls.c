@@ -811,7 +811,7 @@ int tcpls_accept(tcpls_t *tcpls, int socket, uint8_t *cookie, uint32_t transport
 
     }
     else {
-      assert(con->state == CLOSED);
+      assert(con->state == CLOSED || con->state == FAILED);
       con->state = CONNECTED;
       con->socket = socket;
     }
@@ -863,6 +863,8 @@ int tcpls_accept(tcpls_t *tcpls, int socket, uint8_t *cookie, uint32_t transport
     memcpy(&input[4], &transportid, 4);
     int ret;
     tcpls->sending_stream = NULL;
+    tcpls->send_start = 0;
+    tcpls->sendbuf->off = 0;
     stream_send_control_message(tcpls->tls, 0, tcpls->sendbuf,
         tcpls->tls->traffic_protection.enc.aead, input, TRANSPORT_NEW, 8);
     if (!con) {
@@ -1582,6 +1584,9 @@ static int initiate_recovering(tcpls_t *tcpls, connect_info_t *con) {
         prop.client.src = (struct sockaddr_storage *) &recon->src6->addr;
       }
       ret = tcpls_handshake(tcpls->tls, &prop);
+      if (ret) {
+        fprintf(stderr, "tcpls_handshake returned %d\n", ret);
+      }
     }
     /* let's mention on which we failover */
     con->transportid_to_failover = recon->this_transportid;
@@ -1711,7 +1716,7 @@ static connect_info_t* try_reconnect(tcpls_t *tcpls, connect_info_t *con_closed)
         if (found) {
           int ret;
           struct timeval timeout = {.tv_sec=2, .tv_usec=0};
-          struct sockaddr *src, *dest;
+          struct sockaddr *src=NULL, *dest=NULL;
           if (con->src)
             src = (struct sockaddr *) &con->src->addr;
           else if (con->src6)
@@ -1731,7 +1736,7 @@ static connect_info_t* try_reconnect(tcpls_t *tcpls, connect_info_t *con_closed)
   /* Simply retry con_closed;*/ 
   int ret;
   struct timeval timeout = {.tv_sec=2, .tv_usec=0};
-  struct sockaddr *src, *dest;
+  struct sockaddr *src=NULL, *dest=NULL;
   if (con_closed->src)
     src = (struct sockaddr *) &con_closed->src->addr;
   else if (con_closed->src6)
@@ -1860,7 +1865,7 @@ static int handle_connect(tcpls_t *tcpls, tcpls_v4_addr_t *src, tcpls_v4_addr_t
     }
   }
 
-  if (coninfo->state == CLOSED) {
+  if (coninfo->state == CLOSED || coninfo->state == FAILED) {
     /** we can connect */
     if (!coninfo->socket) {
       if ((coninfo->socket = socket(afinet, SOCK_STREAM|SOCK_NONBLOCK, 0)) < 0) {
@@ -2073,7 +2078,7 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
           ret = tcpls_add_v4(ptls, &addr, 0, 0, 0);
           nbr--;
         }
-        return ret;
+        return 0;
       }
       break;
     case MULTIHOMING_v6:
@@ -2091,7 +2096,7 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
           ret = tcpls_add_v6(ptls, &addr, 0, 0, 0);
           nbr--;
         }
-        return ret;
+        return 0;
       }
       break;
     case TRANSPORT_NEW:
@@ -2196,7 +2201,6 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
         uint32_t streamid = *(uint32_t *)&input[4];
         uint32_t stream_seq = *(uint32_t *)&input[8];
         connect_info_t *con = get_con_info_from_socket(ptls->tcpls, ptls->tcpls->socket_rcv);
-        fprintf(stderr, "Receiving a Failover on socket %d\n", ptls->tcpls->socket_rcv);
         /* find the con linked to peer_transportid and migrate all streams
          * from this con to con, and send a FAILOVER message */
         connect_info_t *con_failed;
@@ -2240,7 +2244,6 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
           /* in case where no elemens were yet popped */
           if (seq == 1)
             seq--;
-          fprintf(stderr, "Sending FAILOVER with seq %u\n", seq);
           memcpy(input+8, &seq, 4);
           if (found) {
             stream_send_control_message(ptls, stream_to_use->streamid,
@@ -2275,8 +2278,7 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
          * stream should be decrypted with that seq; and potentially, we already
          * see it! That should be handed properly when handling the decrypted
          * data*/
-        fprintf(stderr, "Origin stream_seq: %u, new for recover: %u\n",(uint32_t) stream_failed->aead_dec->seq,
-            stream_seq);
+        fprintf(stderr, "Next record should be decrypted with seq %u\n", stream_seq);
         stream_failed->aead_dec->seq = (uint64_t) stream_seq;
       }
       break;
@@ -2685,6 +2687,8 @@ static void tcpls_housekeeping(tcpls_t *tcpls) {
           if (!stream_failed->failover_end_sent && !stream_failed->stream_usable) {
             /* first, we send the unacked data */
             int ret;
+            fprintf(stderr, "sent seq %u; our send_queue contains %d records, and our next enc seq is %lu\n",
+                stream_failed->last_seq_poped+1, stream_failed->send_queue->size, stream_failed->aead_enc->seq);
             ret = send_unacked_data(tcpls, stream_failed, con_to_failover);
             if (ret < 0) {
               //analyze what to do
@@ -2694,6 +2698,7 @@ static void tcpls_housekeeping(tcpls_t *tcpls) {
             /* if we have flushed the buffer, let's send FAILOVER_END */
             if (stream_failed->send_start == stream_failed->sendbuf->off) {
               char input[8];
+              tcpls->sending_stream = stream_failed;
               memcpy(input, &con_to_failover->peer_transportid, 4);
               memcpy(input+4, &stream_failed->streamid, 4);
               stream_send_control_message(tcpls->tls, stream_failed->streamid,
@@ -2720,18 +2725,36 @@ static void tcpls_housekeeping(tcpls_t *tcpls) {
                 stream_failed->send_start += ret;
               }
               stream_failed->stream_usable = 1;
+
             }
             else {
               /** XXX CALLBACK con WANTS TO WRITE*/
               fprintf(stderr,"Unimplemented callback: socket %d has data to write!\n", con->socket);
+              /**returns*/
             }
           }
         }
-        if (tcpls->tls->ctx->connection_event_cb)
-          tcpls->tls->ctx->connection_event_cb(CONN_CLOSED, con->socket, con->this_transportid,
-              tcpls->tls->ctx->cb_data);
-        con->socket = 0;
-        tcpls->failover_recovering = 0;
+        /** Do we me miss fully sending a FAILOVER_END? */
+        int do_we_miss_a_failover_end = 0;
+        tcpls_stream_t *stream;
+        for (int i = 0; i < tcpls->streams->size; i++) {
+          stream = list_get(tcpls->streams, i);
+          if (stream->orcon_transportid == con->this_transportid && !stream->failover_end_sent)
+            do_we_miss_a_failover_end++;
+        }
+        if (!do_we_miss_a_failover_end) {
+          /*reinit failover_end_sent*/
+          for (int i = 0; i < tcpls->streams->size; i++) {
+            stream = list_get(tcpls->streams, i);
+            if (stream->failover_end_sent)
+              stream->failover_end_sent = 0;
+          }
+          if (tcpls->tls->ctx->connection_event_cb)
+            tcpls->tls->ctx->connection_event_cb(CONN_CLOSED, con->socket, con->this_transportid,
+                tcpls->tls->ctx->cb_data);
+          con->socket = 0;
+          tcpls->failover_recovering = 0;
+        }
       }
     }
   }
@@ -2746,9 +2769,11 @@ static void shift_buffer(ptls_buffer_t *buf, size_t delta) {
 }
 
 
+/**
+ * Compute the time difference between t_current and t_init
+ */
 static struct timeval timediff(struct timeval *t_current, struct timeval *t_init) {
   struct timeval diff;
-
   diff.tv_sec = t_current->tv_sec - t_init->tv_sec;
   diff.tv_usec = t_current->tv_usec - t_init->tv_usec;
 
@@ -2852,16 +2877,16 @@ static void compute_client_rtt(connect_info_t *con, struct timeval *timeout,
   struct timeval t_current;
   gettimeofday(&t_current, NULL);
 
-  int new_val =
+  time_t new_val =
     timeout->tv_sec*(uint64_t)1000000+timeout->tv_usec
     - (t_current.tv_sec*(uint64_t)1000000+t_current.tv_usec
         - t_previous->tv_sec*(uint64_t)1000000-t_previous->tv_usec);
 
   memcpy(t_previous, &t_current, sizeof(*t_previous));
 
-  int sec = new_val / 1000000;
+  time_t sec = new_val / 1000000;
   timeout->tv_sec = sec;
-  timeout->tv_usec = new_val - timeout->tv_sec*(uint64_t)1000000;
+  timeout->tv_usec = (suseconds_t) (new_val - timeout->tv_sec*(uint64_t)1000000);
 
   con->connect_time = timediff(&t_current, t_initial);
   con->state = CONNECTED;
@@ -3216,6 +3241,8 @@ static void connection_fail(tcpls_t *tcpls, connect_info_t *con) {
     tcpls->tls->ctx->connection_event_cb(CONN_FAILED, con->socket, con->this_transportid,
         tcpls->tls->ctx->cb_data);
   tcpls->nbr_tcp_streams--;
+  con->buffrag->off = 0;
+  tcpls->buffrag->off = 0;
 }
 
 static void connection_close(tcpls_t *tcpls, connect_info_t *con) {
@@ -3226,6 +3253,8 @@ static void connection_close(tcpls_t *tcpls, connect_info_t *con) {
         tcpls->tls->ctx->cb_data);
   con->socket = 0;
   tcpls->nbr_tcp_streams--;
+  con->buffrag->off = 0;
+  tcpls->buffrag->off = 0;
 }
 
 void tcpls_free(tcpls_t *tcpls) {
