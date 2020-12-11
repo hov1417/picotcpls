@@ -2269,7 +2269,7 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
          * stream should be decrypted with that seq; and potentially, we already
          * see it! That should be handed properly when handling the decrypted
          * data*/
-        fprintf(stderr, "Next record should be decrypted with seq %u\n", stream_seq);
+        /*fprintf(stderr, "Next record should be decrypted with seq %u\n", stream_seq);*/
         stream_failed->aead_dec->seq = (uint64_t) stream_seq;
       }
       break;
@@ -2673,8 +2673,8 @@ static void tcpls_housekeeping(tcpls_t *tcpls) {
           if (!stream_failed->failover_end_sent && !stream_failed->stream_usable) {
             /* first, we send the unacked data */
             int ret;
-            fprintf(stderr, "sent seq %u; our send_queue contains %d records, and our next enc seq is %lu\n",
-                stream_failed->last_seq_poped+1, stream_failed->send_queue->size, stream_failed->aead_enc->seq);
+            /*fprintf(stderr, "sent seq %u; our send_queue contains %d records, and our next enc seq is %lu\n",*/
+                /*stream_failed->last_seq_poped+1, stream_failed->send_queue->size, stream_failed->aead_enc->seq);*/
             tcpls->sending_con = con_to_failover;
             tcpls->sending_stream = stream_failed;
             ret = send_unacked_data(tcpls, stream_failed, con_to_failover);
