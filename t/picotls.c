@@ -559,7 +559,7 @@ enum {
     TEST_HANDSHAKE_KEY_UPDATE
 };
 
-static int mpjoin_process(int socket, uint8_t *connid, uint8_t *cookie, uint32_t transportid, void *cb_data) {
+static int mpjoin_process(tcpls_t *tcpls, int socket, uint8_t *connid, uint8_t *cookie, uint32_t transportid, void *cb_data) {
     assert(connid);
     assert(cookie);
     return 0;
@@ -1218,8 +1218,6 @@ static void test_sends_varlen_bpf_prog(void)
   memset(&con, 0, sizeof(con));
   con.state = JOINED;
   list_add(tcpls_client->connect_infos, &con);
-  tcpls_client->socket_rcv = 0;
-  tcpls_server->socket_rcv = 0;
   ret = ptls_handle_message(client, &cbuf, coffs, 0, NULL, 0, NULL);
   ok(ret == PTLS_ERROR_IN_PROGRESS);
   ret = feed_messages(server, &sbuf, soffs, cbuf.base, coffs, NULL);
@@ -1259,7 +1257,7 @@ static void test_sends_varlen_bpf_prog(void)
   ok(ret == 0);
   tcpls_stream_t *stream = stream_get(tcpls_server, streamid);
   consumed = stream->sendbuf->off;
-  tcpls_client->socket_rcv = con.socket;
+  tcpls_client->transportid_rcv = con.this_transportid;
   tcpls_client->streamid_rcv = streamid;
   ptls_aead_context_t *rememberctx = client->traffic_protection.dec.aead;
   client->traffic_protection.dec.aead = ((tcpls_stream_t *) list_get(tcpls_client->streams, 0))->aead_dec;
@@ -1311,8 +1309,6 @@ static void test_tcpls_mpjoin(void)
   memset(&con, 0, sizeof(con));
   list_add(tcpls_client->connect_infos, &con);
   list_add(tcpls_server->connect_infos, &con);
-  tcpls_client->socket_rcv = 0;
-  tcpls_server->socket_rcv = 0;
   
   ret = ptls_handle_message(client, &cbuf, coffs, 0, NULL, 0, NULL);
   
@@ -1389,8 +1385,6 @@ static void test_sends_tcpls_record(void)
   /*con.this_transportid = 42;*/
   /*list_add(tcpls_client->connect_infos, &con);*/
   list_add(tcpls_server->connect_infos, &con);
-  tcpls_client->socket_rcv = 0;
-  tcpls_server->socket_rcv = 0;
 
   ret = ptls_handle_message(client, &cbuf, coffs, 0, NULL, 0, NULL);
   
@@ -1506,8 +1500,6 @@ static void test_server_sends_tcpls_encrypted_extensions(void)
   memset(&con, 0, sizeof(con));
   list_add(tcpls_client->connect_infos, &con);
   list_add(tcpls_server->connect_infos, &con);
-  tcpls_client->socket_rcv = 0;
-  tcpls_server->socket_rcv = 0;
 
   ret = ptls_set_user_timeout(server, 5, 0, 1, 1);
   ok(ret == 0);
@@ -1574,7 +1566,6 @@ static void test_tcpls_usertimeout(void)
   connect_info_t con;
   memset(&con, 0, sizeof(con));
   list_add(tcpls_server->connect_infos, &con);
-  tcpls_server->socket_rcv = 0;
   /** 1 second */
   int ret = ptls_set_user_timeout(server, 1, 0, 1, 1);
   ok(ret == 0);
@@ -1638,8 +1629,6 @@ static void test_tcpls_option_api(void)
   memset(&con, 0, sizeof(con));
   list_add(tcpls_client->connect_infos, &con);
   list_add(tcpls_server->connect_infos, &con);
-  tcpls_client->socket_rcv = 0;
-  tcpls_server->socket_rcv = 0;
   /* full handshake */
   ret = ptls_handle_message(client, &cbuf, coffs, 0, NULL, 0, NULL);
   ok(ret == PTLS_ERROR_IN_PROGRESS);
@@ -2151,8 +2140,6 @@ static void test_tcpls_addresses(void)
   memset(&con, 0, sizeof(con));
   list_add(tcpls->connect_infos, &con);
   list_add(tcpls_server->connect_infos, &con);
-  tcpls->socket_rcv = 0;
-  tcpls_server->socket_rcv = 0;
 
   ret = ptls_handle_message(client, &cbuf, coffs, 0, NULL, 0, NULL);
   ok(ret == PTLS_ERROR_IN_PROGRESS);
@@ -2231,8 +2218,6 @@ static void test_tcpls_stream_api(void)
   ptls_buffer_init(&sbuf, "", 0);
   client = tcpls->tls;
   server = tcpls_server->tls;
-  tcpls->socket_rcv = 0;
-  tcpls_server->socket_rcv = 0;
 
   ret = ptls_handle_message(client, &cbuf, coffs, 0, NULL, 0, NULL);
   ok(ret == PTLS_ERROR_IN_PROGRESS);

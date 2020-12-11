@@ -144,7 +144,7 @@ static int handle_address_event(tcpls_t *tcpls, tcpls_event_t event, struct sock
 }
 
 /** Simplistic joining procedure for testing */
-static int handle_mpjoin(int socket, uint8_t *connid, uint8_t *cookie, uint32_t
+static int handle_mpjoin(tcpls_t *tcpls, int socket, uint8_t *connid, uint8_t *cookie, uint32_t
     transportid, void *cbdata) {
   printf("Wooh, we're handling a mpjoin\n");
   list_t *conntcpls = (list_t*) cbdata;
@@ -155,9 +155,8 @@ static int handle_mpjoin(int socket, uint8_t *connid, uint8_t *cookie, uint32_t
     if (!memcmp(ctcpls->tcpls->connid, connid, CONNID_LEN)) {
       for (int j = 0; j < conntcpls->size; j++) {
         ctcpls2 = list_get(conntcpls, j);
-        if (ctcpls2->conn_fd == socket) {
-          /*if (ctcpls2->tcpls)*/
-            /*tcpls_free(ctcpls2->tcpls);*/
+        if (ctcpls2->tcpls == tcpls) {
+          tcpls_free(ctcpls2->tcpls);
           ctcpls2->tcpls = ctcpls->tcpls;
         }
       }
@@ -232,11 +231,12 @@ static int handle_stream_event(tcpls_t *tcpls, tcpls_event_t event,
   return 0;
 }
 
-static int handle_client_connection_event(tcpls_event_t event, int socket, int transportid, void *cbdata) {
+static int handle_client_connection_event(tcpls_t *tcpls, tcpls_event_t event,
+    int socket, int transportid, void *cbdata) {
   struct cli_data *data = (struct cli_data*) cbdata;
   switch (event) {
     case CONN_FAILED:
-      fprintf(stderr, "Received a CONN_FAILED\n");
+      fprintf(stderr, "Received a CONN_FAILED on socket %d\n", socket);
       break;
     case CONN_CLOSED:
       fprintf(stderr, "Received a CONN_CLOSED; marking socket %d to remove\n", socket);
@@ -251,16 +251,17 @@ static int handle_client_connection_event(tcpls_event_t event, int socket, int t
   return 0;
 }
 
-static int handle_connection_event(tcpls_event_t event, int socket, int transportid, void *cbdata) {
+static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
+    socket, int transportid, void *cbdata) {
   list_t *conntcpls = (list_t*) cbdata;
   switch (event) {
     case CONN_FAILED:
       {
-        fprintf(stderr, "Received a CONN_FAILED\n");
+        fprintf(stderr, "Received a CONN_FAILED on socket %d\n", socket);
         struct conn_to_tcpls *ctcpls;
         for (int i = 0; i < conntcpls->size; i++) {
           ctcpls = list_get(conntcpls, i);
-          if (ctcpls->conn_fd == socket) {
+          if (ctcpls->tcpls == tcpls && ctcpls->conn_fd == socket && ctcpls->transportid == transportid) {
             ctcpls->state = FAILED;
             break;
           }
@@ -273,7 +274,7 @@ static int handle_connection_event(tcpls_event_t event, int socket, int transpor
         struct conn_to_tcpls *ctcpls;
         for (int i = 0; i < conntcpls->size; i++) {
           ctcpls = list_get(conntcpls, i);
-          if (ctcpls->conn_fd == socket) {
+          if (ctcpls->tcpls == tcpls && ctcpls->conn_fd == socket) {
             ctcpls->transportid = transportid;
             ctcpls->state = CONNECTED;
             break;
@@ -287,10 +288,10 @@ static int handle_connection_event(tcpls_event_t event, int socket, int transpor
         struct conn_to_tcpls *ctcpls;
         for (int i = 0; i < conntcpls->size; i++) {
           ctcpls = list_get(conntcpls, i);
-          if (ctcpls->conn_fd == socket) {
+          if (ctcpls->tcpls == tcpls && ctcpls->conn_fd == socket && ctcpls->transportid == transportid) {
             ctcpls->to_remove = 1;
+            ctcpls->conn_fd = 0;
             ctcpls->state = CLOSED;
-            break;
           }
         }
       }
@@ -394,7 +395,7 @@ static int handle_server_zero_rtt_test(list_t *conn_tcpls, fd_set *readset) {
   ptls_buffer_init(&recvbuf, "", 0);
   for (int i = 0; i < conn_tcpls->size; i++) {
     struct conn_to_tcpls *conn = list_get(conn_tcpls, i);
-    if (FD_ISSET(conn->conn_fd, readset)) {
+    if (FD_ISSET(conn->conn_fd, readset) && conn->state >= CONNECTED) {
       ret = handle_tcpls_read(conn->tcpls, conn->conn_fd, &recvbuf);
       if (ptls_handshake_is_complete(conn->tcpls->tls)){
         ptls_buffer_dispose(&recvbuf);
@@ -415,7 +416,7 @@ static int handle_server_multipath_test(list_t *conn_tcpls, int *inputfd, fd_set
   ptls_buffer_init(&recvbuf, "", 0);
   for (int i = 0; i < conn_tcpls->size; i++) {
     struct conn_to_tcpls *conn = list_get(conn_tcpls, i);
-    if (FD_ISSET(conn->conn_fd, readset)) {
+    if (FD_ISSET(conn->conn_fd, readset) && conn->state >= CONNECTED) {
       ret = handle_tcpls_read(conn->tcpls, conn->conn_fd, &recvbuf);
       if (ptls_handshake_is_complete(conn->tcpls->tls) && conn->is_primary && *inputfd > 0)
         conn->wants_to_write = 1;

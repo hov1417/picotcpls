@@ -107,8 +107,6 @@ typedef struct st_connect_info_t {
    * connection
    **/
   ptls_buffer_t *buffrag;
-  /** Last seq number received */
-  uint32_t last_seq_received;
   /** nbr bytes received since the last ackknowledgment sent */
   uint32_t nbr_bytes_received;
   /** nbr records received on this con since the last ack sent */
@@ -296,8 +294,8 @@ struct st_tcpls_t {
   uint32_t nbr_tcp_streams;
   /** socket of the primary address - must be update at each primary change*/
   int socket_primary;
-  /** remember on which socket we pulled out bytes */
-  int socket_rcv;
+  /** remember on which connection we are pulling bytes */
+  int transportid_rcv;
   /** remember on which stream we are decrypting -- useful to send back a
    * DATA_ACK with the right stream*/
   streamid_t streamid_rcv;

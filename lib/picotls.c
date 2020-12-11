@@ -3210,7 +3210,7 @@ static int decode_client_hello(ptls_t *tls, struct st_ptls_client_hello_t *ch,
             src += len;
           });
           assert(properties->received_mpjoin_to_process);
-          if (properties->received_mpjoin_to_process(properties->socket, connid, cookie, transportid, tls->ctx->cb_data)) {
+          if (properties->received_mpjoin_to_process(tls->tcpls, properties->socket, connid, cookie, transportid, tls->ctx->cb_data)) {
             ret = PTLS_ALERT_BAD_MPJOIN;
             goto Exit;
           }

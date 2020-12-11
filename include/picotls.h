@@ -839,7 +839,7 @@ typedef struct st_ptls_log_event_t {
     /**
      * A callback used when a connection event occurs
      */
-    int (*connection_event_cb)(tcpls_event_t event, int socket, int transportid, void *cb_data);
+    int (*connection_event_cb)(tcpls_t *tcpls, tcpls_event_t event, int socket, int transportid, void *cb_data);
     /**
      * A callback used when a new address is received or an existing address is
      * removed by the peer
@@ -969,7 +969,7 @@ typedef struct st_ptls_log_event_t {
     /**
      * A callback used when a mpjoin is received
      */
-    int (*received_mpjoin_to_process)(int socket, uint8_t *connid, uint8_t *cookie, uint32_t transportid, void *cb_data);
+    int (*received_mpjoin_to_process)(tcpls_t *tcpls, int socket, uint8_t *connid, uint8_t *cookie, uint32_t transportid, void *cb_data);
     /**
      * TCPLS handshake socket
      */
