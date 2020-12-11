@@ -1263,7 +1263,7 @@ int tcpls_receive(ptls_t *tls, ptls_buffer_t *decryptbuf, struct timeval *tv) {
     if (FD_ISSET(con->socket, &rset) && con->state >= CONNECTED) {
       ret = recv(con->socket, input, PTLS_MAX_ENCRYPTED_RECORD_SIZE, 0);
       if (ret <= 0) {
-        if ((errno == ECONNRESET || errno == EPIPE) && tcpls->enable_failover) {
+        if ((errno == ECONNRESET || errno == EPIPE || errno == ETIMEDOUT) && tcpls->enable_failover) {
           //XXX check whether we have to close the con
           initiate_recovering(tcpls, con);
         }
@@ -1526,7 +1526,7 @@ static int do_send(tcpls_t *tcpls, tcpls_stream_t *stream, connect_info_t *con) 
         tcpls->sendbuf->off-tcpls->send_start, 0);
   }
   if (ret < 0) {
-    if ((errno == ECONNRESET || errno == EPIPE) && tcpls->enable_failover) {
+    if ((errno == ECONNRESET || errno == EPIPE || errno == ETIMEDOUT) && tcpls->enable_failover) {
       if (tcpls->tls->is_server) {
         if (tcpls->tls->ctx->stream_event_cb) {
           tcpls_stream_t *stream_failed;
