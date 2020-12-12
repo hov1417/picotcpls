@@ -349,8 +349,8 @@ int tcpls_send(ptls_t *tls, streamid_t streamid, const void *input, size_t nbyte
  */
 int tcpls_receive(ptls_t *tls, ptls_buffer_t *input, struct timeval *tv);
 
-int ptls_set_user_timeout(ptls_t *ctx, uint16_t value, uint16_t sec_or_min,
-    uint8_t setlocal, uint8_t settopeer);
+int tcpls_set_user_timeout(tcpls_t *tcpls, int transportid, uint16_t value,
+    uint16_t msec_or_sec, uint8_t setlocal, uint8_t settopeer);
 
 int ptls_set_failover(ptls_t *ptls, char *address);
 

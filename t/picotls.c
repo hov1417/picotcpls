@@ -1405,7 +1405,8 @@ static void test_sends_tcpls_record(void)
   ok(sbuf.off == 0);
   ok(ptls_handshake_is_complete(server));
   
-  ok(ptls_set_user_timeout(client, 10, 0, 0, 1) == 0);
+  ok(tcpls_set_user_timeout(tcpls_client, 0, 10, 0, 1, 1) ==
+      PTLS_ERROR_CONN_NOT_FOUND);
   
   cbuf.off = 0;
   ptls_buffer_init(&decbuf, "", 0);
@@ -1501,8 +1502,8 @@ static void test_server_sends_tcpls_encrypted_extensions(void)
   list_add(tcpls_client->connect_infos, &con);
   list_add(tcpls_server->connect_infos, &con);
 
-  ret = ptls_set_user_timeout(server, 5, 0, 1, 1);
-  ok(ret == 0);
+  ret = tcpls_set_user_timeout(tcpls_server, 0, 5, 0, 1, 1);
+  ok(ret == -1);
 
   ret = ptls_handle_message(client, &cbuf, coffs, 0, NULL, 0, NULL);
   
@@ -1558,17 +1559,15 @@ static void test_server_sends_tcpls_encrypted_extensions(void)
 
 static void test_tcpls_usertimeout(void)
 {
-  ptls_t *server;
   ctx->support_tcpls_options = 1;
   ctx_peer->support_tcpls_options = 1;
   tcpls_t *tcpls_server = tcpls_new(ctx_peer, 1);
-  server = tcpls_server->tls;
   connect_info_t con;
   memset(&con, 0, sizeof(con));
   list_add(tcpls_server->connect_infos, &con);
   /** 1 second */
-  int ret = ptls_set_user_timeout(server, 1, 0, 1, 1);
-  ok(ret == 0);
+  int ret = tcpls_set_user_timeout(tcpls_server, 0, 1, 0, 1, 1);
+  ok(ret == -1);
   /** check whether the timeout has the right value */
   tcpls_options_t *option;
   for (int i = 0; i < NBR_SUPPORTED_TCPLS_OPTIONS; i++) {
@@ -1578,8 +1577,8 @@ static void test_tcpls_usertimeout(void)
   }
   ok(*((uint16_t*) option->data->base) == 1);
   /** 1 minute */
-  ret = ptls_set_user_timeout(server, 1, 1, 1, 1);
-  ok(ret == 0);
+  ret = tcpls_set_user_timeout(tcpls_server, 0, 1, 1, 1, 1);
+  ok(ret == -1);
   /*ok(*((uint16_t *) (*option)->data) == 32769);*/
   ok(*((uint16_t *) option->data->base) == 32769);
   ctx->support_tcpls_options = 0;

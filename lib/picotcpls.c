@@ -56,6 +56,7 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/time.h>
+#include <netinet/tcp.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include "picotypes.h"
@@ -65,7 +66,7 @@
 /* Forward declarations */
 static int tcpls_init_context(ptls_t *ptls, const void *data, size_t datalen,
   tcpls_enum_t type, uint8_t setlocal, uint8_t settopeer);
-static int setlocal_usertimeout(ptls_t *ptls, int val);
+static int setlocal_usertimeout(int socket, uint32_t val);
 static int setlocal_bpf_cc(ptls_t *ptls, const uint8_t *bpf_prog, size_t proglen);
 static void _set_primary(tcpls_t *tcpls);
 static tcpls_stream_t *stream_new(ptls_t *tcpls, streamid_t streamid,
@@ -1398,20 +1399,28 @@ int tcpls_send_tcpoption(tcpls_t *tcpls, streamid_t streamid, tcpls_enum_t type)
  */
 
 /**
- * Set a timeout option (i.e., RFC5482) to transport within the TLS connection
+ * Set a timeout option (i.e., similar to RFC5482) to transportid within the TLS connection
+ *
+ * Note that RFC5482 specifies the granularity in Second or Minute. We specify
+ * here in Milisecond or Second.
+ *
+ * set streamid to 0 if this has not to be set locally
  */
-int ptls_set_user_timeout(ptls_t *ptls, uint16_t value, uint16_t sec_or_min,
-    uint8_t setlocal, uint8_t settopeer) {
+int tcpls_set_user_timeout(tcpls_t *tcpls, int transportid,  uint16_t value,
+    uint16_t msec_or_sec, uint8_t setlocal, uint8_t settopeer) {
   int ret = 0;
   uint16_t *val = malloc(sizeof(uint16_t));
   if (val == NULL)
     return PTLS_ERROR_NO_MEMORY;
-  *val = value | sec_or_min << 15;
-  ret = tcpls_init_context(ptls, val, 2, USER_TIMEOUT, setlocal, settopeer);
+  *val = value | msec_or_sec << 15;
+  ret = tcpls_init_context(tcpls->tls, val, 2, USER_TIMEOUT, setlocal, settopeer);
   if (ret)
     return ret;
   if (setlocal) {
-    ret = setlocal_usertimeout(ptls, *val);
+    connect_info_t *con = connection_get(tcpls, transportid);
+    if (!con)
+      return PTLS_ERROR_CONN_NOT_FOUND;
+    ret = setlocal_usertimeout(con->socket, *val);
   }
   return ret;
 }
@@ -2055,10 +2064,22 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
         *nval = *(uint16_t *)input;
         int ret;
         /**nval = ntoh16(input);*/
-        ret= tcpls_init_context(ptls, nval, 2, USER_TIMEOUT, 1, 0);
+        ret = tcpls_init_context(ptls, nval, 2, USER_TIMEOUT, 1, 0);
         if (ret)
           return -1; /** Should define an appropriate error code */
-        return setlocal_usertimeout(ptls, *nval);
+
+        connect_info_t *con = connection_get(ptls->tcpls, ptls->tcpls->transportid_rcv);
+        if (!con)
+          return PTLS_ERROR_CONN_NOT_FOUND;
+        uint32_t val = 0;
+        /*take the last 15 bits of nval */
+        uint16_t mask = (1 << 15) - 1;
+        val = *nval & mask;
+        /* in seconds */
+        if (1 == (*nval >> 15))
+          val = 1000*val;
+        setlocal_usertimeout(con->socket, val);
+        return 0;
       }
       break;
     case MULTIHOMING_v4:
@@ -2491,7 +2512,10 @@ Exit:
   return ret;
 }
 
-static int setlocal_usertimeout(ptls_t *ptls, int val) {
+static int setlocal_usertimeout(int socket, uint32_t val) {
+  if (setsockopt(socket, IPPROTO_TCP, TCP_USER_TIMEOUT, &val, sizeof(val)) == -1) {
+    return -1;
+  }
   return 0;
 }
 
