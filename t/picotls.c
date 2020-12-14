@@ -1253,7 +1253,7 @@ static void test_sends_varlen_bpf_prog(void)
   ptls_buffer_init(&sbuf, input, 50000);
   ret = ptls_set_bpf_cc(server, input, 50000, 1, 1);
   ok(ret == 0);
-  ret = tcpls_send_tcpoption(tcpls_server, streamid, BPF_CC);
+  ret = tcpls_send_tcpoption(tcpls_server, 0, BPF_CC, 0);
   ok(ret == 0);
   tcpls_stream_t *stream = stream_get(tcpls_server, streamid);
   consumed = stream->sendbuf->off;
@@ -1420,7 +1420,7 @@ static void test_sends_tcpls_record(void)
   consumed = tcpls_client->sendbuf->off;
   ret = ptls_receive(server, &decbuf, NULL, tcpls_client->sendbuf->base, &consumed);
   ok(ret==0);
-  ret = tcpls_send_tcpoption(tcpls_client, streamid, USER_TIMEOUT);
+  ret = tcpls_send_tcpoption(tcpls_client, 0, USER_TIMEOUT, 0);
   tcpls_stream_t *stream = stream_get(tcpls_client, streamid);
   ok(stream != NULL);
   consumed = stream->sendbuf->off;

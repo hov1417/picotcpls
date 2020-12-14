@@ -42,7 +42,7 @@
 * ptls_set_[OPTION]
 * and then
 *
-* ptls_send_tcpotion(...)
+* tcpls_send_tcpotion(...)
 *
 */
 
@@ -737,7 +737,7 @@ Exit:
  * valid. If it is, it creates a new connection and trigger a callback, marking
  * this con usable to attach streams.
  *
- * returns -1 upon error, and 0 if succeeded
+ * returns -1 upon error, and the transportid of the new connection if succeeded
  */
 
 int tcpls_accept(tcpls_t *tcpls, int socket, uint8_t *cookie, uint32_t transportid) {
@@ -901,10 +901,14 @@ int tcpls_accept(tcpls_t *tcpls, int socket, uint8_t *cookie, uint32_t transport
     /** not this one */
     tcpls->initial_socket = socket;
   }
-  if (!con)
+  if (!con) {
     list_add(tcpls->connect_infos, &newconn);
+    ret = newconn.this_transportid;
+  }
+  else
+    ret = con->this_transportid;
   tcpls->nbr_tcp_streams++;
-  return 0;
+  return ret;
 }
 
 
@@ -1333,7 +1337,7 @@ int tcpls_receive(ptls_t *tls, ptls_buffer_t *decryptbuf, struct timeval *tv) {
  *
  * This function should be called after the handshake is complete for both party
  * */
-int tcpls_send_tcpoption(tcpls_t *tcpls, streamid_t streamid, tcpls_enum_t type)
+int tcpls_send_tcpoption(tcpls_t *tcpls, int transportid, tcpls_enum_t type, int sendnow)
 {
   ptls_t *tls = tcpls->tls;
   if(tls->traffic_protection.enc.aead == NULL)
@@ -1351,28 +1355,31 @@ int tcpls_send_tcpoption(tcpls_t *tcpls, streamid_t streamid, tcpls_enum_t type)
   }
   if (!found)
     return -1;
-  tcpls_stream_t *stream = stream_get(tcpls, streamid);
+  tcpls_stream_t *stream;
+  found = 0;
+  for (int i = 0; i < tcpls->streams->size && !found; i++) {
+     stream = list_get(tcpls->streams, i);
+     if (stream->transportid == transportid && stream->stream_usable)
+       found = 1;
+  }
   //Use default sendbuf;
   ptls_buffer_t *buf;
   ptls_aead_context_t *ctx_to_use;
-  if (!stream) {
-    return -1;
+  if (!found) {
+    buf = tcpls->sendbuf;
+    buf->off = 0;
+    tcpls->send_start = 0;
+    ctx_to_use = tcpls->tls->traffic_protection.enc.aead;
+    stream = NULL;
   }
   else {
     buf = stream->sendbuf;
     ctx_to_use = stream->aead_enc;
   }
-  if (tls->traffic_protection.enc.aead->seq >= 16777216)
-    tls->needs_key_update = 1;
-
-  if (tls->needs_key_update) {
-    int ret;
-    if ((ret = update_send_key(tls, buf, tls->key_update_send_request)) != 0)
-      return ret;
-    tls->needs_key_update = 0;
-    tls->key_update_send_request = 0;
-  }
   if (option->is_varlen) {
+    if (!stream) {
+      return -1;
+    }
     /** We need to send the size of the option, which we might need to buffer */
     /** 4 bytes for the variable length, 2 bytes for the option value */
 
@@ -1380,17 +1387,26 @@ int tcpls_send_tcpoption(tcpls_t *tcpls, streamid_t streamid, tcpls_enum_t type)
     /** Send the CONTROL_VARLEN_BEGIN as a single record first */
     memcpy(input, &option->data->len, 4);
     stream_send_control_message(tls, stream->streamid, buf, ctx_to_use, input, CONTROL_VARLEN_BEGIN, 4);
-    return buffer_push_encrypted_records(tls, stream->streamid, buf,
+    buffer_push_encrypted_records(tls, stream->streamid, buf,
         PTLS_CONTENT_TYPE_TCPLS_CONTROL, type, option->data->base,
         option->data->len, ctx_to_use);
   }
   else {
     uint8_t input[option->data->len];
     memcpy(input, option->data->base, option->data->len);
-    return buffer_push_encrypted_records(tls, stream->streamid, buf,
+    buffer_push_encrypted_records(tls, 0, buf,
         PTLS_CONTENT_TYPE_TCPLS_CONTROL, type, input,
         option->data->len, ctx_to_use);
   }
+  if (sendnow) {
+    connect_info_t *con = connection_get(tcpls, transportid);
+    if (!con)
+      return -1;
+    int ret = do_send(tcpls, stream, con);
+    if (!did_we_sent_everything(tcpls, stream, ret))
+      return -1;
+  }
+  return 0;
 }
 
 /**=====================================================================================*/

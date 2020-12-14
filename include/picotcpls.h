@@ -357,7 +357,7 @@ int ptls_set_failover(ptls_t *ptls, char *address);
 int ptls_set_bpf_scheduler(ptls_t *ptls, const uint8_t *bpf_prog_bytecode,
     size_t bytecodelen, int setlocal, int settopeer);
 
-int tcpls_send_tcpoption(tcpls_t *tcpls, streamid_t streamid, tcpls_enum_t type);
+int tcpls_send_tcpoption(tcpls_t *tcpls, int transportid, tcpls_enum_t type, int sendnow);
 
 void tcpls_free(tcpls_t *tcpls);
 

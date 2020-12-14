@@ -160,7 +160,11 @@ static int handle_mpjoin(tcpls_t *tcpls, int socket, uint8_t *connid, uint8_t *c
           ctcpls2->tcpls = ctcpls->tcpls;
         }
       }
-      return tcpls_accept(ctcpls->tcpls, socket, cookie, transportid);
+      int ret = tcpls_accept(ctcpls->tcpls, socket, cookie, transportid);
+      if (ctcpls->tcpls->enable_failover && ctcpls->tcpls->tls->is_server && ret >= 0) {
+        tcpls_send_tcpoption(ctcpls->tcpls, ret, USER_TIMEOUT, 1);
+      }
+      return 0;
     }
   }
   return -1;
@@ -334,6 +338,9 @@ static int handle_tcpls_read(tcpls_t *tcpls, int socket, ptls_buffer_t *buf) {
     memset(&prop, 0, sizeof(prop));
     prop.received_mpjoin_to_process = &handle_mpjoin;
     prop.socket = socket;
+    if (tcpls->enable_failover && tcpls->tls->is_server) {
+      tcpls_set_user_timeout(tcpls, 0, 250, 0, 1, 1);
+    }
     if ((ret = tcpls_handshake(tcpls->tls, &prop)) != 0) {
       if (ret == PTLS_ERROR_HANDSHAKE_IS_MPJOIN) {
         return ret;
@@ -994,7 +1001,7 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
           else {
             fprintf(stderr, "Accepting a new connection\n");
             tcpls_t *new_tcpls = tcpls_new(ctx,  1);
-            new_tcpls->enable_failover = 0;
+            new_tcpls->enable_failover = 1;
             struct conn_to_tcpls conntcpls;
             memset(&conntcpls, 0, sizeof(conntcpls));
             conntcpls.conn_fd = new_conn;
@@ -1077,7 +1084,7 @@ static int run_client(struct sockaddr_storage *sa_our, struct sockaddr_storage
   tcpls_t *tcpls = tcpls_new(ctx, 0);
   tcpls_add_ips(tcpls, sa_our, sa_peer, nbr_our, nbr_peer);
   ctx->output_decrypted_tcpls_data = 0;
-  tcpls->enable_failover = 0;
+  tcpls->enable_failover = 1;
   signal(SIGPIPE, sig_handler);
 
   if (ctx->support_tcpls_options) {

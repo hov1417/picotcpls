@@ -13,7 +13,7 @@ do
 	if [ $COUNT -gt $LIMIT ]
 	then
 		$COMMAND -A FORWARD -p tcp -d $IP -j REJECT --reject-with tcp-reset
-		sleep 1
+		sleep 3
 		$COMMAND -F
 	fi
 	sleep 0.05
