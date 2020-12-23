@@ -20,6 +20,6 @@ do
     PATH=0
   fi
   sleep $TIME
-  iptables-F
+  iptables -F
 done
 
