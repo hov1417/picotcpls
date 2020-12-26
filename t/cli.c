@@ -103,6 +103,7 @@ struct cli_data {
   list_t *socklist;
   list_t *streamlist;
   list_t *socktoremove;
+  const char *goodputfile;
 };
 
 static struct tcpls_options tcpls_options;
@@ -466,6 +467,12 @@ static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
     int mB_received = 0;
     struct timeval timeout;
     ptls_handshake_properties_t prop = {NULL};
+    FILE *outputfile = NULL;
+    if (data->goodputfile) {
+      outputfile = fopen(data->goodputfile, "a");
+    }
+ 
+
     while (1) {
       /*cleanup*/
       int *socket;
@@ -503,6 +510,37 @@ static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
           if (received_data / 1000000 > mB_received) {
             mB_received++;
             printf("Received %d MB\n",mB_received);
+          }
+          if (outputfile && ret >= 0) {
+            /** write infos on this received data */
+            struct sockaddr_storage peer_sockaddr;
+            struct sockaddr_storage ss;
+            socklen_t sslen = sizeof(struct sockaddr_storage);
+            if (getsockname(*socket, (struct sockaddr *) &ss, &sslen) < 0) {
+              perror("getsockname(2) failed");
+            }
+            if (getpeername(*socket, (struct sockaddr *) &peer_sockaddr, &sslen) < 0) {
+              perror("getpeername(2) failed");
+            }
+            char buf_ipsrc[INET6_ADDRSTRLEN], buf_ipdest[INET6_ADDRSTRLEN];
+            if (ss.ss_family == AF_INET) {
+              inet_ntop(AF_INET, &((struct sockaddr_in*)&ss)->sin_addr, buf_ipsrc, sizeof(buf_ipsrc));
+              inet_ntop(AF_INET, &((struct sockaddr_in*)&peer_sockaddr)->sin_addr, buf_ipdest, sizeof(buf_ipdest));
+            }
+            else {
+              inet_ntop(AF_INET, &((struct sockaddr_in6*)&ss)->sin6_addr, buf_ipsrc, sizeof(buf_ipsrc));
+              inet_ntop(AF_INET, &((struct sockaddr_in6*)&peer_sockaddr)->sin6_addr, buf_ipdest, sizeof(buf_ipdest));
+            }
+            struct timeval now;
+            struct tm *tm;
+            gettimeofday(&now, NULL);
+            tm = localtime(&now.tv_sec);
+            char timebuf[32], usecbuf[7];
+            strftime(timebuf, 32, "%H:%M:%S", tm);
+            strcat(timebuf, ".");
+            sprintf(usecbuf, "%d", (uint32_t) now.tv_usec);
+            strcat(timebuf, usecbuf);
+            fprintf(outputfile, "%s %s > %s %u\n", timebuf, buf_ipsrc, buf_ipdest, ret);
           }
           break;
         }
@@ -577,6 +615,8 @@ static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
     ret = 0;
   Exit:
     fclose(mtest);
+    if (outputfile)
+      fclose(outputfile);
     ptls_buffer_dispose(&recvbuf);
     return ret;
   }
@@ -1068,7 +1108,7 @@ static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
   static int run_client(struct sockaddr_storage *sa_our, struct sockaddr_storage
       *sa_peer, int nbr_our, int nbr_peer,  ptls_context_t *ctx, const char *server_name, const char
       *input_file, ptls_handshake_properties_t *hsprop, int request_key_update,
-      int keep_sender_open, integration_test_t test, unsigned int failover_enabled)
+      int keep_sender_open, integration_test_t test, unsigned int failover_enabled, const char *goodputfile)
   {
     int fd;
 
@@ -1080,6 +1120,7 @@ static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
     data.socklist = socklist;
     data.streamlist = streamlist;
     data.socktoremove = socktoremove;
+    data.goodputfile = goodputfile;
     ctx->cb_data = &data;
     ctx->stream_event_cb = &handle_client_stream_event;
     ctx->connection_event_cb = &handle_client_connection_event;
@@ -1179,7 +1220,7 @@ static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
     ptls_cipher_suite_t *cipher_suites[128] = {NULL};
     ptls_context_t ctx = {ptls_openssl_random_bytes, &ptls_get_time, key_exchanges, cipher_suites};
     ptls_handshake_properties_t hsprop = {{{{NULL}}}};
-    const char *host, *port, *input_file = NULL, *esni_file = NULL;
+    const char *host, *port, *input_file = NULL, *esni_file = NULL, *goodputfile = NULL;
     integration_test_t test = T_NOTEST;
     struct {
       ptls_key_exchange_context_t *elements[16];
@@ -1195,7 +1236,7 @@ static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
     tcpls_options.peer_addrs6 = new_list(39*sizeof(char), 2);
     int family = 0;
 
-    while ((ch = getopt(argc, argv, "46abBC:c:i:Ik:nN:es:SE:K:l:y:vhtd:p:P:z:Z:T:f")) != -1) {
+    while ((ch = getopt(argc, argv, "46abBC:c:i:Ik:nN:es:SE:K:l:y:vhtd:p:P:z:Z:T:fg:")) != -1) {
       switch (ch) {
         case '4':
           family = AF_INET;
@@ -1411,6 +1452,9 @@ static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
         case 'f':
                   tcpls_options.failover_enabled = 1;
                   break;
+        case 'g':
+                  goodputfile = optarg;
+                  break;
         default:
                   exit(1);
       }
@@ -1521,6 +1565,6 @@ static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
           input_file, &hsprop, request_key_update, test, tcpls_options.failover_enabled);
     } else {
       return run_client(sa_ours, sa_peer, nbr_our_addrs, nbr_peer_addrs, &ctx,
-          host, input_file, &hsprop, request_key_update, keep_sender_open, test, tcpls_options.failover_enabled);
+          host, input_file, &hsprop, request_key_update, keep_sender_open, test, tcpls_options.failover_enabled, goodputfile);
     }
   }
