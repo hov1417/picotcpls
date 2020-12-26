@@ -1755,6 +1755,9 @@ static connect_info_t* try_reconnect(tcpls_t *tcpls, connect_info_t *con_closed)
         /* Try to connect to this con*/
         if (found) {
           int ret;
+          // XXX Maybe just try initial connection rtt+some C
+          // XXX we could race connections instead and use the one that
+          // connected the fastest
           struct timeval timeout = {.tv_sec=2, .tv_usec=0};
           struct sockaddr *src=NULL, *dest=NULL;
           if (con->src)
