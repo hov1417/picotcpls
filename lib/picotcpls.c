@@ -76,7 +76,7 @@ static int cmp_times(struct timeval *t1, struct timeval *t2);
 static int stream_send_control_message(ptls_t *tls, streamid_t streamid, ptls_buffer_t *sendbuf, ptls_aead_context_t *enc,
   const void *inputinfo, tcpls_enum_t message, uint32_t message_len);
 static connect_info_t *get_con_info_from_socket(tcpls_t *tcpls, int socket);
-static connect_info_t *get_best_con(tcpls_t *tcpls);
+/*static connect_info_t *get_best_con(tcpls_t *tcpls);*/
 static int get_con_info_from_addrs(tcpls_t *tcpls, tcpls_v4_addr_t *src,
   tcpls_v4_addr_t *dest, tcpls_v6_addr_t *src6, tcpls_v6_addr_t *dest6,
   connect_info_t **coninfo);
@@ -103,7 +103,7 @@ static void connection_close(tcpls_t *tcpls, connect_info_t *con);
 static void connection_fail(tcpls_t *tcpls, connect_info_t *con);
 static int did_we_sent_everything(tcpls_t *tcpls, tcpls_stream_t *stream, int bytes_sent);
 static void tcpls_housekeeping(tcpls_t *tcpls);
-static connect_info_t *try_reconnect(tcpls_t *tcpls, connect_info_t *con);
+static connect_info_t *try_reconnect(tcpls_t *tcpls, connect_info_t *con, int *remaining_con);
 static int send_unacked_data(tcpls_t *tcpls, tcpls_stream_t *stream, connect_info_t *tocon);
 static int do_send(tcpls_t *tcpls, tcpls_stream_t *stream, connect_info_t *con);
 static int initiate_recovering(tcpls_t *tcpls, connect_info_t *con);
@@ -118,14 +118,14 @@ void *tcpls_new(void *ctx, int is_server) {
   if (tcpls == NULL)
     return NULL;
   memset(tcpls, 0, sizeof(*tcpls));
-  tcpls->cookies = new_list(COOKIE_LEN, 4);
+  tcpls->cookies = new_list(COOKIE_LEN, 18);
   if (is_server) {
     tls = ptls_server_new(ptls_ctx);
     tcpls->next_stream_id = 2147483649;  // 2**31 +1
     /** Generate connid and cookie */
     ptls_ctx->random_bytes(tcpls->connid, CONNID_LEN);
     uint8_t rand_cookies[COOKIE_LEN];
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 18; i++) {
       ptls_ctx->random_bytes(rand_cookies, COOKIE_LEN);
       list_add(tcpls->cookies, rand_cookies);
     }
@@ -433,7 +433,7 @@ int tcpls_connect(ptls_t *tls, struct sockaddr *src, struct sockaddr *dest,
   tcpls->nbr_tcp_streams = nfds;
   connect_info_t *con;
   int nbr_errors = 0;
-  while (remaining_nfds) {
+  while (remaining_nfds && timeout) {
     int result = 0;
     FD_ZERO(&wset);
     for (int i = 0; i < tcpls->connect_infos->size; i++) {
@@ -472,11 +472,7 @@ int tcpls_connect(ptls_t *tls, struct sockaddr *src, struct sockaddr *dest,
           }
           /** we connected! */
           else {
-            struct timeval timeout = {.tv_sec = 100, .tv_usec = 0};
-            compute_client_rtt(con, &timeout, &t_initial, &t_previous);
-            int flags = fcntl(con->socket, F_GETFL);
-            flags &= ~O_NONBLOCK;
-            fcntl(con->socket, F_SETFL, flags);
+            compute_client_rtt(con, timeout, &t_initial, &t_previous);
           }
         }
       }
@@ -644,6 +640,13 @@ int tcpls_handshake(ptls_t *tls, ptls_handshake_properties_t *properties) {
     if (properties && properties->client.mpjoin) {
       /* we should get the TRANSPORTID_NEW -- NOTE; this is the size should not
        * exceed it */
+      fd_set rset;
+      // XXX put this as an handshake property
+      FD_ZERO(&rset);
+      FD_SET(sock, &rset);
+      rret = select(sock+1, &rset, NULL, NULL, properties->client.timeout);
+      if (rret <= 0)
+        return -1;
       uint8_t recvbuf[256];
       while ((rret = read(sock, recvbuf, sizeof(recvbuf))) == -1 && errno == EINTR)
         ;
@@ -680,8 +683,11 @@ int tcpls_handshake(ptls_t *tls, ptls_handshake_properties_t *properties) {
 
       ptls_buffer_dispose(&sendbuf);
       ptls_buffer_dispose(&decryptbuf);
-      if (!rret)
+      if (!rret) {
         con->state = JOINED;
+        // remove the cookie we have sent
+        tcpls->cookies->size -= 1;
+      }
       return rret;
     }
   }
@@ -1285,7 +1291,10 @@ int tcpls_receive(ptls_t *tls, ptls_buffer_t *decryptbuf, struct timeval *tv) {
       if (ret <= 0) {
         if ((errno == ECONNRESET || errno == EPIPE || errno == ETIMEDOUT) && tcpls->enable_failover) {
           //XXX check whether we have to close the con
-          initiate_recovering(tcpls, con);
+          if (initiate_recovering(tcpls, con) < 0) {
+            fprintf(stderr, "Failed to recover the connection. Something wrong happened\n");
+            return -1;
+          }
         }
         else {
         //XXX
@@ -1603,29 +1612,45 @@ static int initiate_recovering(tcpls_t *tcpls, connect_info_t *con) {
   /** If failover is enabled and we are the client, let's connect again */
   fprintf(stderr,"initiate recovering\n");
   errno = 0;
-  int ret = 0;
+  int ret = 1;
   connection_fail(tcpls, con);
   if (!tcpls->tls->is_server) {
     connect_info_t *recon;
-    recon = try_reconnect(tcpls, con);
-    /* perform a join handshake to reconnect to the server */
-    if (recon->state == CONNECTED) {
-      /* We need to join the connection */
-      ptls_handshake_properties_t prop = {NULL};
-      prop.client.transportid = recon->this_transportid;
-      prop.client.mpjoin = 1;
-      prop.socket = recon->socket;
-      if (recon->dest) {
-        prop.client.dest = (struct sockaddr_storage *) &recon->dest->addr;
-        prop.client.src = (struct sockaddr_storage *) &recon->src->addr;
-      }
-      else {
-        prop.client.dest = (struct sockaddr_storage *) &recon->dest6->addr;
-        prop.client.src = (struct sockaddr_storage *) &recon->src6->addr;
-      }
-      ret = tcpls_handshake(tcpls->tls, &prop);
-      if (ret) {
-        fprintf(stderr, "tcpls_handshake returned %d\n", ret);
+    int remaining_con = tcpls->connect_infos->size-1;
+    while (ret && remaining_con) {
+      /* only try the ones that already exist */
+      recon = try_reconnect(tcpls, con, &remaining_con);
+      /* perform a join handshake to reconnect to the server */
+      if (!recon)
+        return -1;
+      if (recon->state == CONNECTED) {
+        /* We need to join the connection */
+        ptls_handshake_properties_t prop = {NULL};
+        prop.client.transportid = recon->this_transportid;
+        prop.client.mpjoin = 1;
+        prop.socket = recon->socket;
+        if (recon->dest) {
+          prop.client.dest = (struct sockaddr_storage *) &recon->dest->addr;
+          prop.client.src = (struct sockaddr_storage *) &recon->src->addr;
+        }
+        else {
+          prop.client.dest = (struct sockaddr_storage *) &recon->dest6->addr;
+          prop.client.src = (struct sockaddr_storage *) &recon->src6->addr;
+        }
+        struct timeval timeout;
+        if (recon->connect_time.tv_sec >= 1 || recon->connect_time.tv_usec*5 >= 1000000) {
+          timeout.tv_sec=2;
+          timeout.tv_usec=0;
+        }
+        else {
+          timeout.tv_sec=0;
+          timeout.tv_usec=recon->connect_time.tv_usec*5;
+        }
+        prop.client.timeout = &timeout;
+        ret = tcpls_handshake(tcpls->tls, &prop);
+        if (ret) {
+          remaining_con--;
+        }
       }
     }
     /* let's mention on which we failover */
@@ -1729,11 +1754,26 @@ static int send_unacked_data(tcpls_t *tcpls, tcpls_stream_t *stream, connect_inf
  * returns the connect_info_t * that connected or which is already connected
  */
 
-static connect_info_t* try_reconnect(tcpls_t *tcpls, connect_info_t *con_closed) {
+static connect_info_t* try_reconnect(tcpls_t *tcpls, connect_info_t *con_closed, int *remaining_con) {
 
   if (tcpls->connect_infos->size > 1) {
-    /*Check first whether we have another CONNECTED con*/
+    /*Check first whether we have another CONNECTED con with a different src and
+     * dst*/
     connect_info_t *con;
+    for (int i = 0; i < tcpls->connect_infos->size; i++) {
+      con = list_get(tcpls->connect_infos, i);
+      if (con->state >= CONNECTED) {
+        if (con->dest) {
+          if (con->dest != con_closed->dest && con->src != con_closed->src)
+            return con;
+        }
+        else if (con->dest6) {
+          if (con->dest6 != con_closed->dest6 && con->src6 != con_closed->src6)
+            return con;
+        }
+      }
+    }
+    /** Pick any other CONNECTED con */
     for (int i = 0; i < tcpls->connect_infos->size; i++) {
       con = list_get(tcpls->connect_infos, i);
       if (con->state >= CONNECTED)
@@ -1744,8 +1784,9 @@ static connect_info_t* try_reconnect(tcpls_t *tcpls, connect_info_t *con_closed)
     int found = 0;
     for (int i = 0; i < tcpls->connect_infos->size && !found; i++) {
       con = list_get(tcpls->connect_infos, i);
-      if (con != con_closed) {
+      if (con != con_closed && con->state == CLOSED) {
         /* ensure the destination isn't the same address */
+        // XXX shouldn't we just make either src or dest differnt?
         if (con->dest && (con->dest != con_closed->dest)) {
           found = 1;
         }
@@ -1771,6 +1812,11 @@ static connect_info_t* try_reconnect(tcpls_t *tcpls, connect_info_t *con_closed)
           ret = tcpls_connect(tcpls->tls, src, dest, &timeout);
           if (!ret)
             return con;
+          else {
+            /*connection_fail(tcpls, con);*/
+            con->state = FAILED;
+            *remaining_con = *remaining_con-1;
+          }
         }
         found = 0;
       }
@@ -1937,6 +1983,11 @@ static int handle_connect(tcpls_t *tcpls, tcpls_v4_addr_t *src, tcpls_v4_addr_t
       }
     }
     coninfo->state = CONNECTING;
+    /* put back the socket in blocking mode */
+    int flags = fcntl(coninfo->socket, F_GETFL);
+    flags &= ~O_NONBLOCK;
+    fcntl(coninfo->socket, F_SETFL, flags);
+
     *nfds = *nfds + 1;
   }
   else if (coninfo->state == CONNECTING) {
@@ -2264,7 +2315,8 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
           return PTLS_ERROR_CONN_NOT_FOUND;
         /* Ensure the con is in FAILED state; and that transportid_to_failover
          * is correctly set */
-        con_failed->state = FAILED;
+        if (con_failed->state > CLOSED)
+          con_failed->state = FAILED;
         con_failed->transportid_to_failover = con->this_transportid;
 
         tcpls_stream_t *stream_failed = stream_get(ptls->tcpls, streamid);
@@ -2728,7 +2780,9 @@ static void tcpls_housekeeping(tcpls_t *tcpls) {
         tcpls_stream_t *stream_failed;
         for (int i = 0; i < tcpls->streams->size; i++) {
           stream_failed = list_get(tcpls->streams, i);
-          if (!stream_failed->failover_end_sent && !stream_failed->stream_usable) {
+          if (stream_failed->orcon_transportid == con->this_transportid &&
+              !stream_failed->failover_end_sent &&
+              !stream_failed->stream_usable) {
             /* first, we send the unacked data */
             int ret;
             /*fprintf(stderr, "sent seq %u; our send_queue contains %d records, and our next enc seq is %lu\n",*/
@@ -2775,7 +2829,7 @@ static void tcpls_housekeeping(tcpls_t *tcpls) {
             }
             else {
               /** XXX CALLBACK con WANTS TO WRITE*/
-              fprintf(stderr,"Unimplemented callback: socket %d has data to write!\n", con->socket);
+              fprintf(stderr,"Unimplemented callback: socket %d has data to write!\n", con_to_failover->socket);
               /**returns*/
             }
           }
@@ -2792,7 +2846,7 @@ static void tcpls_housekeeping(tcpls_t *tcpls) {
           /*reinit failover_end_sent*/
           for (int i = 0; i < tcpls->streams->size; i++) {
             stream = list_get(tcpls->streams, i);
-            if (stream->failover_end_sent)
+            if (stream->orcon_transportid == con->this_transportid && stream->failover_end_sent)
               stream->failover_end_sent = 0;
           }
           if (tcpls->tls->ctx->connection_event_cb)
@@ -3130,17 +3184,17 @@ static void stream_free(tcpls_stream_t *stream) {
  * Get the fastest CONNECTED con
  */
 
-static connect_info_t *get_best_con(tcpls_t *tcpls) {
-  connect_info_t *con;
-  connect_info_t *con_fastest = list_get(tcpls->connect_infos, 0);
-  for (int i = 1; i < tcpls->connect_infos->size; i++) {
-    con = list_get(tcpls->connect_infos, i);
-    if (con->state == CONNECTED && (cmp_times(&con_fastest->connect_time,
-            &con->connect_time) < 0 || con_fastest->state != CONNECTED))
-      con_fastest = con;
-  }
-  return con_fastest;
-}
+/*static connect_info_t *get_best_con(tcpls_t *tcpls) {*/
+  /*connect_info_t *con;*/
+  /*connect_info_t *con_fastest = list_get(tcpls->connect_infos, 0);*/
+  /*for (int i = 1; i < tcpls->connect_infos->size; i++) {*/
+    /*con = list_get(tcpls->connect_infos, i);*/
+    /*if (con->state == CONNECTED && (cmp_times(&con_fastest->connect_time,*/
+            /*&con->connect_time) < 0 || con_fastest->state != CONNECTED))*/
+      /*con_fastest = con;*/
+  /*}*/
+  /*return con_fastest;*/
+/*}*/
 
 static connect_info_t *get_con_info_from_socket(tcpls_t *tcpls, int socket) {
   connect_info_t *con;

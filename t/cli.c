@@ -540,7 +540,7 @@ static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
             strcat(timebuf, ".");
             sprintf(usecbuf, "%d", (uint32_t) now.tv_usec);
             strcat(timebuf, usecbuf);
-            fprintf(outputfile, "%s %s > %s %u\n", timebuf, buf_ipsrc, buf_ipdest, ret);
+            fprintf(outputfile, "%s %s > %s %u\n", timebuf, buf_ipdest, buf_ipsrc, ret);
           }
           break;
         }
@@ -1137,7 +1137,7 @@ static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
       return ret;
     }
     else {
-      struct timeval timeout = {.tv_sec = 100, .tv_usec = 0};
+      struct timeval timeout = {.tv_sec = 2, .tv_usec = 0};
       int err = tcpls_connect(tcpls->tls, NULL, NULL, &timeout);
       if (err){
         fprintf(stderr, "tcpls_connect failed with err %d\n", err);

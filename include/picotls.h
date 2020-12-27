@@ -142,6 +142,7 @@ extern "C" {
 #define PTLS_ALERT_UNEXPECTED_MESSAGE 10
 #define PTLS_ALERT_BAD_RECORD_MAC 20
 #define PTLS_ALERT_HANDSHAKE_FAILURE 40
+#define PTLS_ALERT_HANDSHAKE_NO_MORE_COOKIE 41
 #define PTLS_ALERT_BAD_CERTIFICATE 42
 #define PTLS_ALERT_CERTIFICATE_REVOKED 44
 #define PTLS_ALERT_CERTIFICATE_EXPIRED 45
@@ -920,6 +921,11 @@ typedef struct st_ptls_log_event_t {
          * ESNIKeys (the value of the TXT record, after being base64-"decoded")
          */
         ptls_iovec_t esni_keys;
+
+        /**
+         * timeout for read call
+         */
+        struct timeval *timeout;
       } client;
       struct {
         /**

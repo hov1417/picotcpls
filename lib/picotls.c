@@ -1736,11 +1736,12 @@ static int send_client_hello(ptls_t *tls, ptls_message_emitter_t *emitter, ptls_
                         ptls_buffer_pushv(sendbuf, tls->tcpls->connid, CONNID_LEN);
                         ptls_buffer_pushv(sendbuf, &properties->client.transportid, 4);
                     });
+                    if (tls->tcpls->cookies->size == 0)
+                      return PTLS_ALERT_HANDSHAKE_NO_MORE_COOKIE;
                     ptls_buffer_push_block(sendbuf, 1, {
                         uint8_t *cookie = list_get(tls->tcpls->cookies, tls->tcpls->cookies->size-1);
                         assert(cookie);
                         ptls_buffer_pushv(sendbuf, cookie, COOKIE_LEN);
-                        list_remove(tls->tcpls->cookies, cookie);
                     });
                 });
             }
