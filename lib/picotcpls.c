@@ -1643,7 +1643,7 @@ static int initiate_recovering(tcpls_t *tcpls, connect_info_t *con) {
           timeout.tv_usec=0;
         }
         else {
-          timeout.tv_sec=0;
+          timeout.tv_sec=2;
           timeout.tv_usec=recon->connect_time.tv_usec*5;
         }
         prop.client.timeout = &timeout;
@@ -1652,6 +1652,9 @@ static int initiate_recovering(tcpls_t *tcpls, connect_info_t *con) {
           remaining_con--;
         }
       }
+    }
+    if (!remaining_con) {
+      return -1;
     }
     /* let's mention on which we failover */
     con->transportid_to_failover = recon->this_transportid;
