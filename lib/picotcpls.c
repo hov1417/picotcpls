@@ -1964,11 +1964,25 @@ static int handle_connect(tcpls_t *tcpls, tcpls_v4_addr_t *src, tcpls_v4_addr_t
         return -1;
       }
     }
+    int on = 1;
+    if (setsockopt(coninfo->socket, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) != 0) {
+      perror("setsockopt(SO_REUSEADDR) failed");
+      return -1;
+    }
     /** try to connect */
     if (src || src6) {
-      src ? bind(coninfo->socket, (struct sockaddr*) &src->addr,
-          sizeof(src->addr)) : bind(coninfo->socket, (struct sockaddr *)
-          &src6->addr, sizeof(src6->addr));
+      if (src) {
+        if (bind(coninfo->socket, (struct sockaddr*) &src->addr, sizeof(src->addr)) != 0) {
+          perror("bind failed");
+          return -1;
+        }
+      }
+      else {
+        if (bind(coninfo->socket, (struct sockaddr *) &src6->addr, sizeof(src6->addr)) != 0) {
+          perror("bind failed");
+          return -1;
+        }
+      }
     }
     if (afinet == AF_INET) {
       if (connect(coninfo->socket, (struct sockaddr*) &dest->addr,
