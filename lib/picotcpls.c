@@ -1650,6 +1650,7 @@ static int initiate_recovering(tcpls_t *tcpls, connect_info_t *con) {
         ret = tcpls_handshake(tcpls->tls, &prop);
         if (ret) {
           remaining_con--;
+          connection_fail(tcpls, recon);
         }
       }
     }
