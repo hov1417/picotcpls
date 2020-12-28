@@ -251,6 +251,9 @@ static int handle_client_connection_event(tcpls_t *tcpls, tcpls_event_t event,
     case CONN_OPENED:
       fprintf(stderr, "Received a CONN_OPENED; adding the socket %d\n", socket);
       list_add(data->socklist, &socket);
+      /*If we get a CON_CLOSED, then a CON_OPENED on the same sock value, we
+       * need to remove the socket from the socktoremove list xD*/
+      list_remove(data->socktoremove, &socket);
       break;
     default: break;
   }

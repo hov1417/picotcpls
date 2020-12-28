@@ -1651,6 +1651,7 @@ static int initiate_recovering(tcpls_t *tcpls, connect_info_t *con) {
         if (ret) {
           remaining_con--;
           connection_fail(tcpls, recon);
+          close(recon->socket);
         }
       }
     }
