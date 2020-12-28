@@ -2678,7 +2678,7 @@ static int did_we_sent_everything(tcpls_t *tcpls, tcpls_stream_t *stream, int by
           sending += ret;
         }
         else {
-          fprintf(stderr, "Error while flushing\n");
+          perror("Error while flushing (send) %d bytes", sendbuf->off-sending);
           return 0;
         }
       }
