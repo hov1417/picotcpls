@@ -367,7 +367,7 @@ static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
   }
 
   static int handle_tcpls_write(tcpls_t *tcpls, struct conn_to_tcpls *conntotcpls,  int *inputfd) {
-    static const size_t block_size = 8192;
+    static const size_t block_size = 4*PTLS_MAX_ENCRYPTED_RECORD_SIZE;
     uint8_t buf[block_size];
     int ret, ioret;
     if (*inputfd > 0)

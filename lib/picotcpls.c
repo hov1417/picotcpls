@@ -48,6 +48,7 @@
 
 #include <arpa/inet.h>
 #include <linux/bpf.h>
+#include <linux/tcp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -56,7 +57,7 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/time.h>
-#include <netinet/tcp.h>
+//#include <netinet/tcp.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include "picotypes.h"
@@ -1283,11 +1284,23 @@ int tcpls_receive(ptls_t *tls, ptls_buffer_t *decryptbuf, struct timeval *tv) {
   }
   ret = 0;
   /* Default strategy -- One max record pulled for each connection */
-  uint8_t input[PTLS_MAX_ENCRYPTED_RECORD_SIZE];
   for (int i =  0; i < tcpls->connect_infos->size; i++) {
     con = list_get(tcpls->connect_infos, i);
     if (FD_ISSET(con->socket, &rset) && con->state >= CONNECTED) {
-      ret = recv(con->socket, input, PTLS_MAX_ENCRYPTED_RECORD_SIZE, 0);
+      /*struct tcp_repair_window trw;*/
+      /*int rcv_size;*/
+      /*socklen_t rcv_size_len = sizeof(rcv_size);*/
+      /*getsockopt(con->socket, SOL_SOCKET, SO_RCVBUF, (void*)&rcv_size, &rcv_size_len);*/
+      /*socklen_t trwlen = sizeof(trw);*/
+      /*getsockopt(con->socket, IPPROTO_TCP, TCP_REPAIR_WINDOW, &trw, &trwlen);*/
+      /*int bufsize = rcv_size;*/
+      /*int full_records = bufsize/(PTLS_MAX_ENCRYPTED_RECORD_SIZE);*/
+      /*if (full_records > 1)*/
+        /*bufsize = full_records*PTLS_MAX_ENCRYPTED_RECORD_SIZE;*/
+      /*else*/
+        /*bufsize = PTLS_MAX_ENCRYPTED_RECORD_SIZE;*/
+      uint8_t input[PTLS_MAX_ENCRYPTED_RECORD_SIZE*4];
+      ret = recv(con->socket, input, PTLS_MAX_ENCRYPTED_RECORD_SIZE*4, 0);
       if (ret <= 0) {
         if ((errno == ECONNRESET || errno == EPIPE || errno == ETIMEDOUT) && tcpls->enable_failover) {
           //XXX check whether we have to close the con
@@ -1643,7 +1656,7 @@ static int initiate_recovering(tcpls_t *tcpls, connect_info_t *con) {
           timeout.tv_usec=0;
         }
         else {
-          timeout.tv_sec=2;
+          timeout.tv_sec=0;
           timeout.tv_usec=recon->connect_time.tv_usec*5;
         }
         prop.client.timeout = &timeout;
