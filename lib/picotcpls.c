@@ -648,6 +648,7 @@ int tcpls_handshake(ptls_t *tls, ptls_handshake_properties_t *properties) {
       rret = select(sock+1, &rset, NULL, NULL, properties->client.timeout);
       if (rret <= 0)
         return -1;
+      tcpls->transportid_rcv = con->this_transportid;
       uint8_t recvbuf[256];
       while ((rret = read(sock, recvbuf, sizeof(recvbuf))) == -1 && errno == EINTR)
         ;
@@ -693,6 +694,7 @@ int tcpls_handshake(ptls_t *tls, ptls_handshake_properties_t *properties) {
     }
   }
   sendbuf.off = 0;
+  tcpls->transportid_rcv = con->this_transportid;
   ssize_t roff;
   uint8_t recvbuf[8192];
   do {
