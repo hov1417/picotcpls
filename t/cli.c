@@ -330,7 +330,7 @@ static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
     int is_primary = 0;
     for (int i = 0; i < nbr_peer; i++) {
       if (sa_peer[i].ss_family == AF_INET) {
-        if (i == 0)
+        if (i == nbr_peer-1)
           is_primary = 1;
         else
           is_primary = 0;
