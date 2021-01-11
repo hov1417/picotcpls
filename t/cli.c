@@ -158,7 +158,8 @@ static int handle_mpjoin(tcpls_t *tcpls, int socket, uint8_t *connid, uint8_t *c
       for (int j = 0; j < conntcpls->size; j++) {
         ctcpls2 = list_get(conntcpls, j);
         if (ctcpls2->tcpls == tcpls) {
-          tcpls_free(ctcpls2->tcpls);
+          //XXX hunt bug here!
+          //tcpls_free(ctcpls2->tcpls);
           ctcpls2->tcpls = ctcpls->tcpls;
         }
       }
