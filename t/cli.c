@@ -441,6 +441,7 @@ static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
       if (FD_ISSET(conn->conn_fd, readset) && conn->state >= CONNECTED) {
         ret = handle_tcpls_read(conn->tcpls, conn->conn_fd, &recvbuf);
         if (ret == -2) {
+          fprintf(stdout, "Setting socket %d as primary\n", conn->conn_fd);
           conn->is_primary = 1;
           ret = 0;
         }
