@@ -2272,6 +2272,7 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
       {
         uint32_t peer_transportid = *(uint32_t*) input;
         connect_info_t *con = connection_get(ptls->tcpls, ptls->tcpls->transportid_rcv);
+        fprintf(stderr, "peer transport id was %d, now %d\n", con->peer_transportid, peer_transportid);
         if (!con)
           return PTLS_ERROR_CONN_NOT_FOUND;
         con->peer_transportid = peer_transportid;
