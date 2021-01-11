@@ -585,11 +585,9 @@ int tcpls_handshake(ptls_t *tls, ptls_handshake_properties_t *properties) {
     }
     sock = con->socket;
   }
-  else if (properties && properties->socket) {
-    sock = properties->socket;
-    con = get_con_info_from_socket(tcpls, sock);
-    if (!con)
-      return -1;
+  else if (properties && properties->client.transportid) {
+    con = connection_get(tcpls, properties->client.transportid);
+    sock = con->socket;
   }
   if (!tls->is_server && !sock) {
     con = get_primary_con_info(tcpls);
@@ -1655,7 +1653,6 @@ static int initiate_recovering(tcpls_t *tcpls, connect_info_t *con) {
         ptls_handshake_properties_t prop = {NULL};
         prop.client.transportid = recon->this_transportid;
         prop.client.mpjoin = 1;
-        prop.socket = recon->socket;
         if (recon->dest) {
           prop.client.dest = (struct sockaddr_storage *) &recon->dest->addr;
           prop.client.src = (struct sockaddr_storage *) &recon->src->addr;
@@ -2719,7 +2716,7 @@ static int did_we_sent_everything(tcpls_t *tcpls, tcpls_stream_t *stream, int by
           sending += ret;
         }
         else {
-          fprintf(stderr, "Ssending %lu failed\n", sendbuf->off-sending);
+          fprintf(stderr, "sending %lu failed\n", sendbuf->off-sending);
           perror("Error while flushing (send)");
           return 0;
         }
