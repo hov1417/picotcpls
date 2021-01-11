@@ -1073,7 +1073,7 @@ int tcpls_streams_attach(ptls_t *tls, streamid_t streamid, int sendnow) {
       memset(input, 0, 8);
       /** send the stream id to the peer */
       memcpy(input, &stream_to_attach->streamid, 4);
-      memcpy(&input[4], &con->peer_transportid, 4);
+      memcpy(&input[4], &con->this_transportid, 4);
       stream_send_control_message(tls, stream_to_attach->streamid,
           sendbuf_to_use, ctx_to_use, input, STREAM_ATTACH, 8);
       stream_to_attach->send_stream_attach_in_sendbuf_pos = sendbuf_to_use->off;
@@ -1183,9 +1183,8 @@ int tcpls_send(ptls_t *tls, streamid_t streamid, const void *input, size_t nbyte
     stream->stream_usable = 1;
     uint8_t input[8];
     /** send the stream id to the peer */
-    uint32_t peer_transportid = 0;
     memcpy(input, &stream->streamid, 4);
-    memcpy(&input[4], &peer_transportid, 4);
+    memcpy(&input[4], &con->this_transportid, 4);
     /** Add a stream message creation to the sending buffer ! */
     tcpls->sending_stream = stream;
     stream_send_control_message(tcpls->tls, 0, stream->sendbuf,
@@ -2288,17 +2287,17 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
     case STREAM_ATTACH:
       {
         streamid_t streamid = *(streamid_t *) input;
-        uint32_t transportid = *(uint32_t*) &input[4];
+        uint32_t peer_transportid = *(uint32_t*) &input[4];
         connect_info_t *con;
         int found = 0;
         for (int i = 0; i < ptls->tcpls->connect_infos->size && !found; i++) {
           con = list_get(ptls->tcpls->connect_infos, i);
-          if (con->this_transportid == transportid && con->state == JOINED) {
+          if (con->peer_transportid == peer_transportid && con->state == JOINED) {
             found = 1;
           }
         }
         if (!found) {
-          fprintf(stdout, "STREAM_ATTACH to a connection not found. Streamid %u, transport id %d\n", streamid, transportid);
+          fprintf(stdout, "STREAM_ATTACH to a connection not found. Streamid %u, peer_transport id %d\n", streamid, peer_transportid);
           return PTLS_ERROR_CONN_NOT_FOUND;
         }
         /** an absolute number that should not reduce at stream close */
