@@ -1063,8 +1063,6 @@ static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
               list_add(tcpls_l, new_tcpls);
               /** ADD our ips  -- This might worth to be ctx and instance-based?*/
               tcpls_add_ips(new_tcpls, sa_ours, NULL, nbr_ours, 0);
-              if (conn_tcpls->size == 0)
-                conntcpls.is_primary = 1;
               list_add(conn_tcpls, &conntcpls);
               if (tcpls_accept(new_tcpls, conntcpls.conn_fd, NULL, 0) < 0)
                 fprintf(stderr, "tcpls_accept returned -1\n");
