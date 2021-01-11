@@ -732,7 +732,7 @@ int tcpls_handshake(ptls_t *tls, ptls_handshake_properties_t *properties) {
     /* we need to tell our peer that this con isn't transport 0 */
     if (con->this_transportid != 0) {
       uint8_t input[4];
-      sendbuf.off = 0;
+      ptls_buffer_init(&sendbuf, "", 0);
       memcpy(input, &con->this_transportid, 4);
       stream_send_control_message(tcpls->tls, 0, &sendbuf,
           tcpls->tls->traffic_protection.enc.aead, input, TRANSPORT_UPDATE, 4);
