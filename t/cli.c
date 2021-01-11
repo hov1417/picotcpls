@@ -327,14 +327,15 @@ static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
       else
         tcpls_add_v6(tcpls->tls, (struct sockaddr_in6*)&sa_our[i], 0, settopeer, 1);
     }
-    int is_primary = 0
+    int is_primary = 0;
     for (int i = 0; i < nbr_peer; i++) {
-      if(sa_peer[i].ss_family == AF_INET)
+      if (sa_peer[i].ss_family == AF_INET) {
         if (i == 0)
           is_primary = 1;
         else
           is_primary = 0;
         tcpls_add_v4(tcpls->tls, (struct sockaddr_in*)&sa_peer[i], is_primary, 0, 0);
+      }
       else
         tcpls_add_v6(tcpls->tls, (struct sockaddr_in6*)&sa_peer[i], 0, 0, 0);
     }
