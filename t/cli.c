@@ -435,7 +435,7 @@ static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
       if (FD_ISSET(conn->conn_fd, readset) && conn->state >= CONNECTED) {
         ret = handle_tcpls_read(conn->tcpls, conn->conn_fd, &recvbuf);
         if (ret == -2) {
-          conn->wants_to_write = 1;
+          conn->is_primary = 1;
           ret = 0;
         }
         if (ptls_handshake_is_complete(conn->tcpls->tls) && conn->is_primary && *inputfd > 0)
