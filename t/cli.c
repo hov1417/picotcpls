@@ -352,6 +352,10 @@ static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
         }
         fprintf(stderr, "tcpls_handshake failed with ret %d\n", ret);
       }
+      else if (ret == 0 && tcpls->tls->is_server) {
+        // set this conn as primary
+        return -2;
+      }
       return 0;
     }
     struct timeval timeout;
@@ -430,6 +434,8 @@ static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
       struct conn_to_tcpls *conn = list_get(conn_tcpls, i);
       if (FD_ISSET(conn->conn_fd, readset) && conn->state >= CONNECTED) {
         ret = handle_tcpls_read(conn->tcpls, conn->conn_fd, &recvbuf);
+        if (ret == -2)
+          conn->wants_to_write = 1;
         if (ptls_handshake_is_complete(conn->tcpls->tls) && conn->is_primary && *inputfd > 0)
           conn->wants_to_write = 1;
         break;
