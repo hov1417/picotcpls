@@ -2185,6 +2185,7 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
           return -1; /** Should define an appropriate error code */
 
         connect_info_t *con = connection_get(ptls->tcpls, ptls->tcpls->transportid_rcv);
+        fprintf(stderr, "Received user timeout for transport %d\n", ptls->tcpls->transportid_rcv);
         if (!con)
           return PTLS_ERROR_CONN_NOT_FOUND;
         uint32_t val = 0;
@@ -2194,7 +2195,9 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
         /* in seconds */
         if (1 == (*nval >> 15))
           val = 1000*val;
-        setlocal_usertimeout(con->socket, val);
+        if (setlocal_usertimeout(con->socket, val) < 0) {
+          fprintf(stderr, "Failed to set user timeout to socket %d\n", con->socket);
+        }
         return 0;
       }
       break;
