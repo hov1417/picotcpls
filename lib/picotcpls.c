@@ -728,8 +728,21 @@ int tcpls_handshake(ptls_t *tls, ptls_handshake_properties_t *properties) {
       ptls_buffer_dispose(&sendbuf);
     } while (ret == PTLS_ERROR_IN_PROGRESS && rret != roff);
   } while (ret == PTLS_ERROR_IN_PROGRESS);
-  if (!ret)
+  if (!ret) {
+    /* we need to tell our peer that this con isn't transport 0 */
+    if (con->this_transportid != 0) {
+      uint8_t input[4];
+      sendbuf.off = 0;
+      memcpy(input, &con->this_transportid, 4);
+      stream_send_control_message(tcpls->tls, 0, &sendbuf,
+          tcpls->tls->traffic_protection.enc.aead, input, TRANSPORT_UPDATE, 4);
+      if ((rret = send(sock, sendbuf.base, sendbuf.off, 0)) < 0) {
+        perror("send(2) failed");
+        goto Exit;
+      }
+    }
     con->state = JOINED;
+  }
   ptls_buffer_dispose(&sendbuf);
   return ret;
 Exit:
@@ -2255,6 +2268,15 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
         }
         return PTLS_ERROR_CONN_NOT_FOUND;
       }
+    case TRANSPORT_UPDATE:
+      {
+        uint32_t peer_transportid = *(uint32_t*) input;
+        connect_info_t *con = connection_get(ptls->tcpls, ptls->tcpls->transportid_rcv);
+        if (!con)
+          return PTLS_ERROR_CONN_NOT_FOUND;
+        con->peer_transportid = peer_transportid;
+        return 0;
+      }
     case STREAM_CLOSE_ACK:
     case STREAM_CLOSE:
       {
@@ -2748,6 +2770,7 @@ int is_handshake_tcpls_message(tcpls_enum_t message) {
   switch (message) {
     case MPJOIN:
     case TRANSPORT_NEW:
+    case TRANSPORT_UPDATE:
     case CONNID:
     case COOKIE:
       return 1;

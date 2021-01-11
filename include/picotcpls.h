@@ -51,7 +51,8 @@ typedef enum tcpls_enum_t {
   STREAM_ATTACH,
   STREAM_CLOSE,
   STREAM_CLOSE_ACK,
-  TRANSPORT_NEW
+  TRANSPORT_NEW,
+  TRANSPORT_UPDATE
 } tcpls_enum_t;
 
 typedef enum tcpls_event_t {
