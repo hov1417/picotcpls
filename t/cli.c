@@ -158,8 +158,7 @@ static int handle_mpjoin(tcpls_t *tcpls, int socket, uint8_t *connid, uint8_t *c
       for (int j = 0; j < conntcpls->size; j++) {
         ctcpls2 = list_get(conntcpls, j);
         if (ctcpls2->tcpls == tcpls) {
-          //XXX hunt bug here!
-          //tcpls_free(ctcpls2->tcpls);
+          tcpls_free(ctcpls2->tcpls);
           ctcpls2->tcpls = ctcpls->tcpls;
         }
       }
@@ -341,7 +340,7 @@ static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
         tcpls_add_v6(tcpls->tls, (struct sockaddr_in6*)&sa_peer[i], 0, 0, 0);
     }
   }
-  static int handle_tcpls_read(tcpls_t *tcpls, int transportid, ptls_buffer_t *buf) {
+  static int handle_tcpls_read(tcpls_t *tcpls, int socket, ptls_buffer_t *buf) {
 
     int ret;
     if (!ptls_handshake_is_complete(tcpls->tls) && tcpls->tls->state <
@@ -349,7 +348,7 @@ static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
       ptls_handshake_properties_t prop = {NULL};
       memset(&prop, 0, sizeof(prop));
       prop.received_mpjoin_to_process = &handle_mpjoin;
-      prop.client.transportid = transportid;
+      prop.socket = socket;
       if (tcpls->enable_failover && tcpls->tls->is_server) {
         tcpls_set_user_timeout(tcpls, 0, 250, 0, 1, 1);
       }
