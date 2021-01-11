@@ -589,6 +589,12 @@ int tcpls_handshake(ptls_t *tls, ptls_handshake_properties_t *properties) {
     con = connection_get(tcpls, properties->client.transportid);
     sock = con->socket;
   }
+  else if (properties && properties->socket) {
+    sock = properties->socket;
+    con = get_con_info_from_socket(tcpls, sock);
+    if (!con)
+      return -1;
+  }
   if (!tls->is_server && !sock) {
     con = get_primary_con_info(tcpls);
     if (!con)

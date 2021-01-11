@@ -341,7 +341,7 @@ static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
         tcpls_add_v6(tcpls->tls, (struct sockaddr_in6*)&sa_peer[i], 0, 0, 0);
     }
   }
-  static int handle_tcpls_read(tcpls_t *tcpls, int socket, ptls_buffer_t *buf) {
+  static int handle_tcpls_read(tcpls_t *tcpls, int transportid, ptls_buffer_t *buf) {
 
     int ret;
     if (!ptls_handshake_is_complete(tcpls->tls) && tcpls->tls->state <
@@ -349,7 +349,7 @@ static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
       ptls_handshake_properties_t prop = {NULL};
       memset(&prop, 0, sizeof(prop));
       prop.received_mpjoin_to_process = &handle_mpjoin;
-      prop.socket = socket;
+      prop.client.transportid = transportid;
       if (tcpls->enable_failover && tcpls->tls->is_server) {
         tcpls_set_user_timeout(tcpls, 0, 250, 0, 1, 1);
       }
