@@ -365,10 +365,10 @@ static int handle_tcpls_read(tcpls_t *tcpls, int socket, ptls_buffer_t *buf) {
     }
     return 0;
   }
-  struct timeval timeout;
-  memset(&timeout, 0, sizeof(timeout));
+  /*struct timeval timeout;*/
+  /*memset(&timeout, 0, sizeof(timeout));*/
   int init_size = buf->off;
-  while ((ret = tcpls_receive(tcpls->tls, buf, &timeout)) == TCPLS_HOLD_DATA_TO_READ)
+  while ((ret = tcpls_receive(tcpls->tls, buf, NULL)) == TCPLS_HOLD_DATA_TO_READ)
     ;
   if (ret < 0) {
     fprintf(stderr, "tcpls_receive returned %d\n",ret);
