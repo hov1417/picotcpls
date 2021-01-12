@@ -16,7 +16,7 @@ parser.add_argument("-tpquic", type=str, help="The tcpdump simplified trace\
                     output from convert_tcpdump.py")
 parser.add_argument("-gpquic", type=str, help="The pquic goodput trace")
 
-parser.add_argument("-i", type=float, help="Time interval on which each bandwidth datapoint is computed")
+parser.add_argument("-i", type=float, default=0.1, help="Time interval on which each bandwidth datapoint is computed")
 
 def parse_time(timestr):
     """
@@ -88,9 +88,10 @@ def parse_file(tcpdump_file, interval):
 if __name__ == "__main__":
     args = parser.parse_args()
     min_timing = float("inf")
-    fig, [ax1, ax2, ax3] = plt.subplots(3, 1)
+    #fig, [ax1, ax2, ax3] = plt.subplots(3, 1)
+    fig, [ax1, ax3] = plt.subplots(2, 1)
     ax1.set(xlabel="time (s)", ylabel="Bandwidth (Mbits)")
-    ax2.set(xlabel="time (s)", ylabel="Bandwidth (Mbits)")
+    #ax2.set(xlabel="time (s)", ylabel="Bandwidth (Mbits)")
     ax3.set(xlabel="time (s)", ylabel="Bandwidth (Mbits)")
     x_max = 0
     tot_mptcp_throughput = 0
@@ -135,13 +136,15 @@ if __name__ == "__main__":
             for path in set(paths_tcpls.values()):
                 ## Hardcode path number to match the tcpdump trace:
                 if path == 0:
+                    labeline = "Goodput"
                     val = 0
                 else:
+                    labeline = None
                     val = 3
                 ax3.plot([(x-min_tcpls)/1000000 for x in x_tcpls[path][:-1]],
                          [(y*8/1000000)/args.i for y in y_tcpls[path][:-1]],
-                         color="orange", linestyle=linemodif[path],
-                         label="Goodput Path {0}".format(val))
+                         color="orange", linestyle="-",
+                         label=labeline)
                 tot_tcpls_goodput += sum(y_tcpls[path][:-1])
         paths_tcpls, x_tcpls, y_tcpls, min_tcpls = parse_file(args.ttcpls, args.i*1000000)
         for path in set(paths_tcpls.values()):
@@ -163,16 +166,16 @@ if __name__ == "__main__":
     ax1.text(.5,.9,'MPTCP 0.94.7',
         horizontalalignment='center',
         transform=ax1.transAxes, fontsize="16")
-    ax2.set_xlim(0, x_max/1000000)
-    ax2.text(.5,.9,'PQUIC + multipath_rr.plugin',
-        horizontalalignment='center',
-        transform=ax2.transAxes, fontsize="16")
+    # ax2.set_xlim(0, x_max/1000000)
+    # ax2.text(.5,.9,'PQUIC + multipath_rr.plugin',
+        # horizontalalignment='center',
+        # transform=ax2.transAxes, fontsize="16")
     ax3.set_xlim(0, x_max/1000000)
     ax3.text(.5,.9,'TCPLS',
         horizontalalignment='center',
         transform=ax3.transAxes, fontsize="16")
     ax1.legend()
-    ax2.legend()
+    # ax2.legend()
     ax3.legend()
     plt.show()
 
