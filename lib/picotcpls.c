@@ -137,7 +137,7 @@ void *tcpls_new(void *ctx, int is_server) {
   }
   // init tcpls stuffs
   tcpls->sendbuf = malloc(sizeof(*tcpls->sendbuf));
-  tcpls->recvbuflen = 4*PTLS_MAX_ENCRYPTED_RECORD_SIZE;
+  tcpls->recvbuflen = 32*PTLS_MAX_ENCRYPTED_RECORD_SIZE;
   tcpls->recvbuf = malloc(tcpls->recvbuflen);
   tcpls->rec_reordering = malloc(sizeof(*tcpls->rec_reordering));
   tcpls->buffrag = malloc(sizeof(*tcpls->buffrag));
@@ -1630,7 +1630,6 @@ static int do_send(tcpls_t *tcpls, tcpls_stream_t *stream, connect_info_t *con) 
       }
     }
     else {
-      fprintf(stderr, "Failed to send on socket %d\n", con->socket);
       perror("send failed");
       connection_close(tcpls, con);
     }
@@ -2202,7 +2201,6 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
           return -1; /** Should define an appropriate error code */
 
         connect_info_t *con = connection_get(ptls->tcpls, ptls->tcpls->transportid_rcv);
-        fprintf(stderr, "Received user timeout for transport %d\n", ptls->tcpls->transportid_rcv);
         if (!con)
           return PTLS_ERROR_CONN_NOT_FOUND;
         uint32_t val = 0;
@@ -2213,7 +2211,7 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
         if (1 == (*nval >> 15))
           val = 1000*val;
         if (setlocal_usertimeout(con->socket, val) < 0) {
-          fprintf(stderr, "Failed to set user timeout to socket %d\n", con->socket);
+          //XXX
         }
         return 0;
       }
