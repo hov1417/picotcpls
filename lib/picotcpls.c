@@ -137,7 +137,8 @@ void *tcpls_new(void *ctx, int is_server) {
   }
   // init tcpls stuffs
   tcpls->sendbuf = malloc(sizeof(*tcpls->sendbuf));
-  tcpls->recvbuf = malloc(sizeof(*tcpls->recvbuf));
+  tcpls->recvbuflen = 4*PTLS_MAX_ENCRYPTED_RECORD_SIZE;
+  tcpls->recvbuf = malloc(tcpls->recvbuflen);
   tcpls->rec_reordering = malloc(sizeof(*tcpls->rec_reordering));
   tcpls->buffrag = malloc(sizeof(*tcpls->buffrag));
   ptls_buffer_init(tcpls->buffrag, "", 0);
@@ -145,7 +146,6 @@ void *tcpls_new(void *ctx, int is_server) {
     return NULL;
   tcpls->tls = tls;
   ptls_buffer_init(tcpls->sendbuf, "", 0);
-  ptls_buffer_init(tcpls->recvbuf, "", 0);
   ptls_buffer_init(tcpls->rec_reordering, "", 0);
   /** From the heap API, a NULL cmp function compares keys as integers, which is
    * what we need */
@@ -1317,8 +1317,7 @@ int tcpls_receive(ptls_t *tls, ptls_buffer_t *decryptbuf, struct timeval *tv) {
         /*bufsize = full_records*PTLS_MAX_ENCRYPTED_RECORD_SIZE;*/
       /*else*/
         /*bufsize = PTLS_MAX_ENCRYPTED_RECORD_SIZE;*/
-      uint8_t input[PTLS_MAX_ENCRYPTED_RECORD_SIZE*4];
-      ret = recv(con->socket, input, PTLS_MAX_ENCRYPTED_RECORD_SIZE*4, 0);
+      ret = recv(con->socket, tcpls->recvbuf, tcpls->recvbuflen, 0);
       if (ret <= 0) {
         if ((errno == ECONNRESET || errno == EPIPE || errno == ETIMEDOUT) && tcpls->enable_failover) {
           //XXX check whether we have to close the con
@@ -1348,7 +1347,7 @@ int tcpls_receive(ptls_t *tls, ptls_buffer_t *decryptbuf, struct timeval *tv) {
           ptls_aead_context_t *remember_aead = tcpls->tls->traffic_protection.dec.aead;
           do {
             consumed = input_size - input_off;
-            rret = ptls_receive(tls, decryptbuf, tcpls->buffrag, input + input_off, &consumed);
+            rret = ptls_receive(tls, decryptbuf, tcpls->buffrag, tcpls->recvbuf + input_off, &consumed);
             input_off += consumed;
           } while (rret == 0 && input_off < input_size);
           /** We may have received a stream attach that changed the aead*/
@@ -1357,9 +1356,9 @@ int tcpls_receive(ptls_t *tls, ptls_buffer_t *decryptbuf, struct timeval *tv) {
         if (input_off < input_size) {
           int progress = 1;
           while (progress && rret) {
-            if ((rret = try_decrypt_with_multistreams(tcpls, input, decryptbuf, &input_off, input_size)) != 0) {
+            if ((rret = try_decrypt_with_multistreams(tcpls, tcpls->recvbuf, decryptbuf, &input_off, input_size)) != 0) {
               progress = input_off;
-              rret = try_decrypt_with_multistreams(tcpls, input, decryptbuf, &input_off, input_size);
+              rret = try_decrypt_with_multistreams(tcpls, tcpls->recvbuf, decryptbuf, &input_off, input_size);
               /* We tried once again all streams but we did not make any input
                * progress; we escape the loop and log an error if rret != 0*/
               if (progress == input_off)
@@ -3423,7 +3422,6 @@ void tcpls_free(tcpls_t *tcpls) {
   if (!tcpls)
     return;
   ptls_buffer_dispose(tcpls->sendbuf);
-  ptls_buffer_dispose(tcpls->recvbuf);
   ptls_buffer_dispose(tcpls->rec_reordering);
   free(tcpls->sendbuf);
   free(tcpls->recvbuf);

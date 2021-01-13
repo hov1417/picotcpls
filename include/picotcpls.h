@@ -215,7 +215,8 @@ struct st_tcpls_t {
   /** If we did not manage to empty sendbuf in one send call */
   int send_start;
   /* Receiving buffer */
-  ptls_buffer_t *recvbuf;
+  uint8_t *recvbuf;
+  int recvbuflen;
   /**
    * Fragmentation buffer for TCPLS -- used when no streams are attached yet
    * */
