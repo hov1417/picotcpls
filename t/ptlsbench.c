@@ -327,7 +327,7 @@ int main(int argc, char **argv)
     for (size_t i = 0; ret == 0 && i < nb_aead_list; i++) {
         if (aead_list[i].enabled_by_defaut || force_all_tests) {
             ret = bench_run_aead(OS, HW, basic_ref, x, aead_list[i].provider, aead_list[i].algo_name, aead_list[i].aead,
-                                 aead_list[i].hash, 1000, 1500, &s);
+                                 aead_list[i].hash, 1000, 16384, &s);
         }
     }
 
