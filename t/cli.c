@@ -75,7 +75,8 @@ typedef enum integration_test_t {
   T_SIMPLE_TRANSFER,
   T_SIMPLE_HANDSHAKE,
   T_ZERO_RTT_HANDSHAKE,
-  T_PERF
+  T_PERF,
+  T_AGGREGATION
 } integration_test_t;
 
 struct tcpls_options {
@@ -458,7 +459,7 @@ static int handle_server_perf_test(struct conn_to_tcpls *conn, fd_set
   return 0;
 }
 
-static int handle_server_multipath_test(list_t *conn_tcpls, int *inputfd, fd_set
+static int handle_server_multipath_test(list_t *conn_tcpls, integration_test_t test, int *inputfd, fd_set
     *readset, fd_set *writeset) {
   /** Now Read data for all tcpls_t * that wants to read */
   int ret = 1;
@@ -473,7 +474,7 @@ static int handle_server_multipath_test(list_t *conn_tcpls, int *inputfd, fd_set
         conn->is_primary = 1;
         ret = 0;
       }
-      if (ptls_handshake_is_complete(conn->tcpls->tls) && conn->is_primary && *inputfd > 0)
+      if (ptls_handshake_is_complete(conn->tcpls->tls) && *inputfd > 0 && (conn->is_primary || (test == T_AGGREGATION && conn->streamid)))
         conn->wants_to_write = 1;
       break;
     }
@@ -543,7 +544,7 @@ Exit:
   ptls_buffer_dispose(&recvbuf);
   return ret;
 }
-static int handle_client_transfer_test(tcpls_t *tcpls, int is_multipath_test, struct cli_data *data) {
+static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data *data) {
   /** handshake*/
   int ret;
   ptls_buffer_t recvbuf;
@@ -558,6 +559,7 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int is_multipath_test, st
   fd_set readfds, writefds, exceptfds;
   int has_migrated = 0;
   int has_remigrated = 0;
+  int has_multipath =0;
   int received_data = 0;
   int mB_received = 0;
   struct timeval timeout;
@@ -644,7 +646,7 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int is_multipath_test, st
     fwrite(recvbuf.base, recvbuf.off, 1, mtest);
     recvbuf.off = 0;
 
-    if (is_multipath_test && received_data >= 41457280  && !has_remigrated) {
+    if (test == T_MULTIPATH && received_data >= 41457280  && !has_remigrated) {
       has_remigrated = 1;
       /*struct timeval timeout;*/
       /*timeout.tv_sec = 5;*/
@@ -678,8 +680,11 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int is_multipath_test, st
       }
     }
     /** We test a migration */
-    if (is_multipath_test && received_data >= 21457280 && !has_migrated) {
-      has_migrated = 1;
+    if (received_data >= 21457280 && ((test == T_MULTIPATH && !has_migrated) || (test == T_AGGREGATION && !has_multipath))) {
+      if (test == T_MULTIPATH)
+        has_migrated = 1;
+      else
+        has_multipath = 1;
       int socket = 0;
       connect_info_t *con = NULL;
       for (int i = 0; i < tcpls->connect_infos->size; i++) {
@@ -703,7 +708,8 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int is_multipath_test, st
         tcpls_streams_attach(tcpls->tls, 0, 1);
         /** Close the stream on the initial connection */
         streamid_t *streamid2 = list_get(data->streamlist, 0);
-        tcpls_stream_close(tcpls->tls, *streamid2, 1);
+        if (test == T_MULTIPATH)
+          tcpls_stream_close(tcpls->tls, *streamid2, 1);
       }
     }
   }
@@ -774,6 +780,7 @@ static int handle_client_connection(tcpls_t *tcpls, struct cli_data *data,
       break;
     case T_SIMPLE_TRANSFER:
     case T_MULTIPATH:
+    case T_AGGREGATION:
       {
         struct timeval timeout;
         timeout.tv_sec = 5;
@@ -784,15 +791,14 @@ static int handle_client_connection(tcpls_t *tcpls, struct cli_data *data,
           fprintf(stderr, "tcpls_connect failed with err %d\n", err);
           return 1;
         }
-        if (test == T_MULTIPATH){
+        if (test == T_MULTIPATH || test == T_AGGREGATION){
           tcpls->enable_multipath = 1;
-          ret = handle_client_transfer_test(tcpls, 1, data);
         }
         else {
           if (tcpls->enable_failover)
             tcpls->enable_multipath = 1;
-          ret = handle_client_transfer_test(tcpls, 0, data);
         }
+        ret = handle_client_transfer_test(tcpls, test, data);
       }
       break;
     case T_PERF:
@@ -1165,7 +1171,7 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
             conntcpls.conn_fd = new_conn;
             conntcpls.wants_to_write = 0;
             conntcpls.tcpls = new_tcpls;
-            if (test == T_MULTIPATH || new_tcpls->enable_failover)
+            if (test == T_MULTIPATH || new_tcpls->enable_failover || test == T_AGGREGATION)
               conntcpls.tcpls->enable_multipath =1;
             list_add(tcpls_l, new_tcpls);
             /** ADD our ips  -- This might worth to be ctx and instance-based?*/
@@ -1180,12 +1186,13 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
       switch (test) {
         case T_SIMPLE_TRANSFER:
         case T_MULTIPATH:
+        case T_AGGREGATION:
           assert(input_file);
           if (!inputfd && (inputfd = open(input_file, O_RDONLY)) == -1) {
             fprintf(stderr, "failed to open file:%s:%s\n", input_file, strerror(errno));
             goto Exit;
           }
-          if ((ret = handle_server_multipath_test(conn_tcpls, &inputfd,  &readset, &writeset)) < -1) {
+          if ((ret = handle_server_multipath_test(conn_tcpls, test, &inputfd,  &readset, &writeset)) < -1) {
             goto Exit;
           }
           break;
@@ -1502,6 +1509,8 @@ int main(int argc, char **argv)
                   test = T_SIMPLE_TRANSFER;
                 else if (strcasecmp(optarg, "perf") == 0)
                   test = T_PERF;
+                else if (strcasecmp(optarg, "aggregation") == 0)
+                  test = T_AGGREGATION;
                 else {
                   fprintf(stderr, "Unknown integration test: %s\n", optarg);
                   exit(1);
