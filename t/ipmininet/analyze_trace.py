@@ -102,7 +102,7 @@ if __name__ == "__main__":
         paths_mptcp, x_mptcp, y_mptcp, min_mptcp = parse_file(args.tmptcp, args.i*1000000)
         for path in set(paths_mptcp.values()):
             ax1.plot([(x-min_mptcp)/1000000 for x in x_mptcp[path][:-1]],
-                     [(y*8/1000000)/args.i for y in y_mptcp[path][:-1]],
+                     [(y*8/1000000)/(2*args.i) for y in y_mptcp[path][:-1]],
                      label="Throughput Path {0}".format(path))
             tot_mptcp_throughput += sum(y_mptcp[path][:-1])
             x_max_mptcp = x_mptcp[path][-1]
@@ -112,7 +112,7 @@ if __name__ == "__main__":
             paths_mptcp, x_mptcp, y_mptcp, min_mptcp = parse_file(args.gmptcp, args.i*1000000)
             for path in set(paths_mptcp.values()):
                 ax1.plot([(x-min_mptcp)/1000000 for x in x_mptcp[path][:-1]],
-                         [(y*8/1000000)/args.i for y in y_mptcp[path][:-1]],
+                         [(y*8/1000000)/(2*args.i) for y in y_mptcp[path][:-1]],
                          color='orange', label="Goodput")
                 tot_mptcp_goodput += sum(y_mptcp[path][:-1])
     if args.tpquic:
@@ -121,13 +121,13 @@ if __name__ == "__main__":
                                                                    args.i*1000000)
             for path in set(paths_pquic.values()):
                 ax2.plot([(x-min_pquic)/1000000 for x in x_pquic[path][:-1]],
-                         [(y*8/1000000)/args.i for y in y_pquic[path][:-1]],
+                         [(y*8/1000000)/(2*args.i) for y in y_pquic[path][:-1]],
                          color='orange', label="Goodput")
         paths_pquic, x_pquic, y_pquic, min_pquic = parse_file(args.tpquic,
                                                                args.i*1000000)
         for path in set(paths_pquic.values()):
             ax2.plot([(x-min_pquic)/1000000 for x in x_pquic[path][:-1]],
-                     [(y*8/1000000)/args.i for y in y_pquic[path][:-1]],
+                     [(y*8/1000000)/(2*args.i) for y in y_pquic[path][:-1]],
                      label="Throughput Path {0}".format(path))
     if args.ttcpls:
         if args.gtcpls:
@@ -142,14 +142,14 @@ if __name__ == "__main__":
                     labeline = None
                     val = 3
                 ax3.plot([(x-min_tcpls)/1000000 for x in x_tcpls[path][:-1]],
-                         [(y*8/1000000)/args.i for y in y_tcpls[path][:-1]],
+                         [(y*8/1000000)/(2*args.i) for y in y_tcpls[path][:-1]],
                          color="orange", linestyle="-",
                          label=labeline)
                 tot_tcpls_goodput += sum(y_tcpls[path][:-1])
         paths_tcpls, x_tcpls, y_tcpls, min_tcpls = parse_file(args.ttcpls, args.i*1000000)
         for path in set(paths_tcpls.values()):
             ax3.plot([(x-min_tcpls)/1000000 for x in x_tcpls[path][:-1]],
-                     [(y*8/1000000)/args.i for y in y_tcpls[path][:-1]],
+                     [(y*8/1000000)/(2*args.i) for y in y_tcpls[path][:-1]],
                      label="Throughput Path {0}".format(path))
             tot_tcpls_throughput += sum(y_tcpls[path][:-1])
             x_max_tcpls = x_tcpls[path][-1]

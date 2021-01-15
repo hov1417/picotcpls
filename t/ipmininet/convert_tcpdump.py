@@ -19,16 +19,34 @@ if __name__ == "__main__":
       paths = {}
       for line in trace:
           if ip_line:
-              packet_length = int(line.split("length")[1].split(")")[0])
-              timestr = line.split(" ")[0]
-              ip_line=False
+              if "IP6" in line:
+                  packet_length = int(line.split("length:")[1].split(")")[0])
+                  timestr = line.split(" ")[0]
+                  ip_src = line.split(">")[0].split()[-1]
+                  ip_dest = line.split(">")[1].split()[0][:-1]
+                  print("{0} {1} > {2} {3}".format(timestr, ip_src, ip_dest,
+                                                   packet_length),
+                        file=outputf)
+              else:
+                  packet_length = int(line.split("length")[1].split(")")[0])
+                  timestr = line.split(" ")[0]
+                  ip_line=False
           else:
-              ip_src = line.split()[0]
-              ip_dest = line.split()[2].split(":")[0]
-              print("{0} {1} > {2} {3}".format(timestr, ip_src, ip_dest,
-                                               packet_length),
-                    file=outputf)
-              ip_line=True
+              if "IP6" in line:
+                  packet_length = int(line.split("length:")[1].split(")")[0])
+                  timestr = line.split(" ")[0]
+                  ip_src = line.split(">")[0].split()[-1]
+                  ip_dest = line.split(">")[1].split()[0].split(":")[0][:-1]
+                  print("{0} {1} > {2} {3}".format(timestr, ip_src, ip_dest,
+                                                   packet_length),
+                        file=outputf)
+              else:
+                  ip_src = line.split()[0]
+                  ip_dest = line.split()[2].split(":")[0]
+                  print("{0} {1} > {2} {3}".format(timestr, ip_src, ip_dest,
+                                                   packet_length),
+                        file=outputf)
+                  ip_line=True
 
 
 

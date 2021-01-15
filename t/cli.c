@@ -689,38 +689,37 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
       connect_info_t *con = NULL;
       for (int i = 0; i < tcpls->connect_infos->size; i++) {
         con = list_get(tcpls->connect_infos, i);
-        if (con->dest6) {
+        if (con->state < JOINED) {
           socket = con->socket;
-          break;
+          prop.socket = socket;
+          prop.client.transportid = con->this_transportid;
+          prop.client.mpjoin = 1;
+          /** Make a tcpls mpjoin handshake */
+          int ret;
+
+          ret = tcpls_handshake(tcpls->tls, &prop);
+          if (!ret) {
+            /** Create a stream on the new connection */
+            tcpls_stream_new(tcpls->tls, NULL, (struct sockaddr*)
+                &tcpls->v6_addr_llist->addr);
+            struct timeval now;
+            struct tm *tm;
+            gettimeofday(&now, NULL);
+            tm = localtime(&now.tv_sec);
+            char timebuf[32], usecbuf[7];
+            strftime(timebuf, 32, "%H:%M:%S", tm);
+            strcat(timebuf, ".");
+            sprintf(usecbuf, "%d", (uint32_t) now.tv_usec);
+            strcat(timebuf, usecbuf);
+            fprintf(stderr, "%s Sending a STREAM_ATTACH on the new path\n", timebuf);
+
+            tcpls_streams_attach(tcpls->tls, 0, 1);
+            /** Close the stream on the initial connection */
+            streamid_t *streamid2 = list_get(data->streamlist, 0);
+            if (test == T_MULTIPATH)
+              tcpls_stream_close(tcpls->tls, *streamid2, 1);
+          }
         }
-      }
-      prop.socket = socket;
-      prop.client.transportid = con->this_transportid;
-      prop.client.mpjoin = 1;
-      /** Make a tcpls mpjoin handshake */
-      int ret;
-
-      ret = tcpls_handshake(tcpls->tls, &prop);
-      if (!ret) {
-        /** Create a stream on the new connection */
-        tcpls_stream_new(tcpls->tls, NULL, (struct sockaddr*)
-            &tcpls->v6_addr_llist->addr);
-        struct timeval now;
-        struct tm *tm;
-        gettimeofday(&now, NULL);
-        tm = localtime(&now.tv_sec);
-        char timebuf[32], usecbuf[7];
-        strftime(timebuf, 32, "%H:%M:%S", tm);
-        strcat(timebuf, ".");
-        sprintf(usecbuf, "%d", (uint32_t) now.tv_usec);
-        strcat(timebuf, usecbuf);
-        fprintf(stderr, "%s Sending a STREAM_ATTACH on the new path\n", timebuf);
-
-        tcpls_streams_attach(tcpls->tls, 0, 1);
-        /** Close the stream on the initial connection */
-        streamid_t *streamid2 = list_get(data->streamlist, 0);
-        if (test == T_MULTIPATH)
-          tcpls_stream_close(tcpls->tls, *streamid2, 1);
       }
     }
   }
