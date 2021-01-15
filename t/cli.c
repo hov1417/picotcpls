@@ -408,10 +408,10 @@ static int handle_tcpls_read(tcpls_t *tcpls, int socket, ptls_buffer_t *buf) {
     }
     return 0;
   }
-  /*struct timeval timeout;*/
-  /*memset(&timeout, 0, sizeof(timeout));*/
+  struct timeval timeout;
+  memset(&timeout, 0, sizeof(timeout));
   int init_size = buf->off;
-  while ((ret = tcpls_receive(tcpls->tls, buf, NULL)) == TCPLS_HOLD_DATA_TO_READ)
+  while ((ret = tcpls_receive(tcpls->tls, buf, &timeout)) == TCPLS_HOLD_DATA_TO_READ)
     ;
   if (ret < 0) {
     fprintf(stderr, "tcpls_receive returned %d\n",ret);
@@ -758,8 +758,13 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
           ret = tcpls_handshake(tcpls->tls, &prop);
           if (!ret) {
             /** Create a stream on the new connection */
-            tcpls_stream_new(tcpls->tls, NULL, (struct sockaddr*)
-                &tcpls->v6_addr_llist->addr);
+            if (con->dest)
+              tcpls_stream_new(tcpls->tls, NULL, (struct sockaddr*)
+                  &con->dest->addr);
+            else
+              tcpls_stream_new(tcpls->tls, NULL, (struct sockaddr*)
+                  &con->dest6->addr);
+              
             struct timeval now;
             struct tm *tm;
             gettimeofday(&now, NULL);
@@ -770,7 +775,6 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
             sprintf(usecbuf, "%d", (uint32_t) now.tv_usec);
             strcat(timebuf, usecbuf);
             fprintf(stderr, "%s Sending a STREAM_ATTACH on the new path\n", timebuf);
-
             ret = tcpls_streams_attach(tcpls->tls, 0, 1);
             if (ret) {
               fprintf(stderr, "Attaching stream failed %d", ret);
