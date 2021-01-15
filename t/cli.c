@@ -764,7 +764,6 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
             else
               tcpls_stream_new(tcpls->tls, NULL, (struct sockaddr*)
                   &con->dest6->addr);
-              
             struct timeval now;
             struct tm *tm;
             gettimeofday(&now, NULL);
@@ -776,8 +775,8 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
             strcat(timebuf, usecbuf);
             fprintf(stderr, "%s Sending a STREAM_ATTACH on the new path\n", timebuf);
             ret = tcpls_streams_attach(tcpls->tls, 0, 1);
-            if (ret) {
-              fprintf(stderr, "Attaching stream failed %d", ret);
+            if (ret < 0) {
+              fprintf(stderr, "Attaching stream failed %d\n", ret);
               perror("Attaching stream failed");
             }
             /** Close the stream on the initial connection */
