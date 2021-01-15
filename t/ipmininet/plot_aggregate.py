@@ -14,8 +14,9 @@ parser.add_argument("--tcpdump", type=str, help="tcpdump trace")
 parser.add_argument("--oname", type=str, help="output figure  name")
 
 parser.add_argument("-i", type=float, default=0.1, help="Time interval on which each bandwidth datapoint is computed")
-parser.add_argument("--newpath_at", type=str, help="Breakage happened at? in\
+parser.add_argument("--event_at", type=str, nargs="+", help="Event happened at? in\
                     second")
+parser.add_argument("--event_text", type=str, nargs="+", "Event text linked to the event_at")
 
 def parse_time(timestr):
     """
@@ -144,11 +145,15 @@ if __name__ == "__main__":
                 label="Throughput Path {}".format(counter))
         counter+=1
     min_timing = min(min_timing, min_timing_t)
-    newpath = parse_time(args.newpath_at)
-    plt.axvline(x=(newpath-min_timing)/1000000, color="k")
-    plt.text((newpath-min_timing)/1000000, 3, "<- Client is attaching a new stream",
-             color="k")
+    counter = 0
+    for event in args.event_at:
+        event = parse_time(event)
+        plt.axvline(x=(event-min_timing)/1000000, color="k")
+        plt.text((newpath-min_timing)/1000000, 3, args.event_text[counter],
+                 color="k")
+        counter+=1
     plt.legend()
-    plt.savefig(args.oname)
+    #plt.savefig(args.oname)
+    plt.show()
 
 

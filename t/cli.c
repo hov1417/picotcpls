@@ -177,6 +177,16 @@ static int handle_mpjoin(tcpls_t *tcpls, int socket, uint8_t *connid, uint8_t *c
 static int handle_client_stream_event(tcpls_t *tcpls, tcpls_event_t event, streamid_t streamid,
     int transportid, void *cbdata) {
   struct cli_data *data = (struct cli_data*) cbdata;
+  struct timeval now;
+  struct tm *tm;
+  gettimeofday(&now, NULL);
+  tm = localtime(&now.tv_sec);
+  char timebuf[32], usecbuf[7];
+  strftime(timebuf, 32, "%H:%M:%S", tm);
+  strcat(timebuf, ".");
+  sprintf(usecbuf, "%d", (uint32_t) now.tv_usec);
+  strcat(timebuf, usecbuf);
+  fprintf(stderr, "%s Stream event %d\n", timebuf, event);
   switch (event) {
     case STREAM_NETWORK_RECOVERED:
       fprintf(stderr, "Handling STREAM_NETWORK_RECOVERED callback\n");
@@ -202,6 +212,17 @@ static int handle_stream_event(tcpls_t *tcpls, tcpls_event_t event,
     streamid_t streamid, int transportid, void *cbdata) {
   list_t *conn_tcpls_l = (list_t *) cbdata;
   struct conn_to_tcpls *conn_tcpls;
+  
+  struct timeval now;
+  struct tm *tm;
+  gettimeofday(&now, NULL);
+  tm = localtime(&now.tv_sec);
+  char timebuf[32], usecbuf[7];
+  strftime(timebuf, 32, "%H:%M:%S", tm);
+  strcat(timebuf, ".");
+  sprintf(usecbuf, "%d", (uint32_t) now.tv_usec);
+  strcat(timebuf, usecbuf);
+  fprintf(stderr, "%s Stream event %d\n", timebuf, event);
   switch (event) {
     case STREAM_OPENED:
     case STREAM_NETWORK_RECOVERED:
@@ -242,6 +263,16 @@ static int handle_stream_event(tcpls_t *tcpls, tcpls_event_t event,
 static int handle_client_connection_event(tcpls_t *tcpls, tcpls_event_t event,
     int socket, int transportid, void *cbdata) {
   struct cli_data *data = (struct cli_data*) cbdata;
+  struct timeval now;
+  struct tm *tm;
+  gettimeofday(&now, NULL);
+  tm = localtime(&now.tv_sec);
+  char timebuf[32], usecbuf[7];
+  strftime(timebuf, 32, "%H:%M:%S", tm);
+  strcat(timebuf, ".");
+  sprintf(usecbuf, "%d", (uint32_t) now.tv_usec);
+  strcat(timebuf, usecbuf);
+  fprintf(stderr, "%s Connection event %d\n", timebuf, event);
   switch (event) {
     case CONN_FAILED:
       fprintf(stderr, "Received a CONN_FAILED on socket %d\n", socket);
@@ -265,6 +296,16 @@ static int handle_client_connection_event(tcpls_t *tcpls, tcpls_event_t event,
 static int handle_connection_event(tcpls_t *tcpls, tcpls_event_t event, int
     socket, int transportid, void *cbdata) {
   list_t *conntcpls = (list_t*) cbdata;
+  struct timeval now;
+  struct tm *tm;
+  gettimeofday(&now, NULL);
+  tm = localtime(&now.tv_sec);
+  char timebuf[32], usecbuf[7];
+  strftime(timebuf, 32, "%H:%M:%S", tm);
+  strcat(timebuf, ".");
+  sprintf(usecbuf, "%d", (uint32_t) now.tv_usec);
+  strcat(timebuf, usecbuf);
+  fprintf(stderr, "%s Connection event %d\n", timebuf, event);
   switch (event) {
     case CONN_FAILED:
       {
