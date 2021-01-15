@@ -76,7 +76,8 @@ typedef enum integration_test_t {
   T_SIMPLE_HANDSHAKE,
   T_ZERO_RTT_HANDSHAKE,
   T_PERF,
-  T_AGGREGATION
+  T_AGGREGATION,
+  T_AGGREGATION_TIME /* same as aggregation, but timing to add a stream is controled by a timer rather than a number of bytes */
 } integration_test_t;
 
 struct tcpls_options {
@@ -515,7 +516,9 @@ static int handle_server_multipath_test(list_t *conn_tcpls, integration_test_t t
         conn->is_primary = 1;
         ret = 0;
       }
-      if (ptls_handshake_is_complete(conn->tcpls->tls) && *inputfd > 0 && (conn->is_primary || (test == T_AGGREGATION && conn->streamid)))
+      if (ptls_handshake_is_complete(conn->tcpls->tls) && *inputfd > 0 &&
+          (conn->is_primary || ((test == T_AGGREGATION  || test ==
+                                 T_AGGREGATION_TIME) && conn->streamid)))
         conn->wants_to_write = 1;
       break;
     }
@@ -587,6 +590,8 @@ Exit:
 }
 static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data *data) {
   /** handshake*/
+  struct timeval t_init, t_now;
+  gettimeofday(&t_init, NULL);
   int ret;
   ptls_buffer_t recvbuf;
   ptls_buffer_init(&recvbuf, "", 0);
@@ -709,6 +714,16 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
       if (!ret) {
         streamid_t streamid = tcpls_stream_new(tcpls->tls, NULL, (struct sockaddr*)
             &tcpls->v4_addr_llist->addr);
+        struct timeval now;
+        struct tm *tm;
+        gettimeofday(&now, NULL);
+        tm = localtime(&now.tv_sec);
+        char timebuf[32], usecbuf[7];
+        strftime(timebuf, 32, "%H:%M:%S", tm);
+        strcat(timebuf, ".");
+        sprintf(usecbuf, "%d", (uint32_t) now.tv_usec);
+        strcat(timebuf, usecbuf);
+        fprintf(stderr, "%s Sending a STREAM_ATTACH on the new path\n", timebuf);
         if (tcpls_streams_attach(tcpls->tls, 0, 1) < 0)
           fprintf(stderr, "Failed to attach stream %u\n", streamid);
         else
@@ -720,8 +735,10 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
         goto Exit;
       }
     }
+    gettimeofday(&t_now, NULL);
+    struct timeval diff = timediff(&t_init, &t_now);
     /** We test a migration */
-    if (received_data >= 21457280 && ((test == T_MULTIPATH && !has_migrated) || (test == T_AGGREGATION && !has_multipath))) {
+    if (received_data >= 21457280 && ((test == T_MULTIPATH && !has_migrated) || (test == T_AGGREGATION && !has_multipath) || (test == T_AGGREGATION_TIME && !has_multipath && diff.tv_sec >= 5))) {
       if (test == T_MULTIPATH)
         has_migrated = 1;
       else
@@ -832,6 +849,7 @@ static int handle_client_connection(tcpls_t *tcpls, struct cli_data *data,
     case T_SIMPLE_TRANSFER:
     case T_MULTIPATH:
     case T_AGGREGATION:
+    case T_AGGREGATION_TIME:
       {
         struct timeval timeout;
         timeout.tv_sec = 5;
@@ -842,7 +860,7 @@ static int handle_client_connection(tcpls_t *tcpls, struct cli_data *data,
           fprintf(stderr, "tcpls_connect failed with err %d\n", err);
           return 1;
         }
-        if (test == T_MULTIPATH || test == T_AGGREGATION){
+        if (test == T_MULTIPATH || test == T_AGGREGATION  || test == T_AGGREGATION_TIME){
           tcpls->enable_multipath = 1;
         }
         else {
@@ -1222,8 +1240,8 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
             conntcpls.conn_fd = new_conn;
             conntcpls.wants_to_write = 0;
             conntcpls.tcpls = new_tcpls;
-            if (test == T_MULTIPATH || new_tcpls->enable_failover || test == T_AGGREGATION)
-              conntcpls.tcpls->enable_multipath =1;
+            if (test == T_MULTIPATH || new_tcpls->enable_failover || test == T_AGGREGATION || test == T_AGGREGATION_TIME)
+              conntcpls.tcpls->enable_multipath = 1;
             list_add(tcpls_l, new_tcpls);
             /** ADD our ips  -- This might worth to be ctx and instance-based?*/
             tcpls_add_ips(new_tcpls, sa_ours, NULL, nbr_ours, 0);
@@ -1238,6 +1256,7 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
         case T_SIMPLE_TRANSFER:
         case T_MULTIPATH:
         case T_AGGREGATION:
+        case T_AGGREGATION_TIME:
           assert(input_file);
           if (!inputfd && (inputfd = open(input_file, O_RDONLY)) == -1) {
             fprintf(stderr, "failed to open file:%s:%s\n", input_file, strerror(errno));
@@ -1562,6 +1581,8 @@ int main(int argc, char **argv)
                   test = T_PERF;
                 else if (strcasecmp(optarg, "aggregation") == 0)
                   test = T_AGGREGATION;
+                else if (strcasecmp(optarg, "aggregation_time") == 0)
+                  test = T_AGGREGATION_TIME;
                 else {
                   fprintf(stderr, "Unknown integration test: %s\n", optarg);
                   exit(1);
