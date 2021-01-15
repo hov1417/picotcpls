@@ -758,9 +758,15 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
           ret = tcpls_handshake(tcpls->tls, &prop);
           if (!ret) {
             /** Create a stream on the new connection */
-            if (con->dest)
+            if (con->dest && con->src)
+              tcpls_stream_new(tcpls->tls, (struct sockaddr*) &con->src->addr, (struct sockaddr*)
+                  &con->dest->addr);
+            else if (con->dest)
               tcpls_stream_new(tcpls->tls, NULL, (struct sockaddr*)
                   &con->dest->addr);
+            else if (con->dest6 && con->src6)
+              tcpls_stream_new(tcpls->tls, (struct sockaddr*) &con->src6->addr, (struct sockaddr*)
+                  &con->dest6->addr);
             else
               tcpls_stream_new(tcpls->tls, NULL, (struct sockaddr*)
                   &con->dest6->addr);
