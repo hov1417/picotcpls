@@ -736,7 +736,7 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
       }
     }
     gettimeofday(&t_now, NULL);
-    struct timeval diff = timediff(&t_init, &t_now);
+    struct timeval diff = timediff(&t_now, &t_init);
     /** We test a migration */
     if (received_data >= 21457280 && ((test == T_MULTIPATH && !has_migrated) || (test == T_AGGREGATION && !has_multipath) || (test == T_AGGREGATION_TIME && !has_multipath && diff.tv_sec >= 5))) {
       if (test == T_MULTIPATH)
