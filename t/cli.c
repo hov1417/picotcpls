@@ -771,7 +771,11 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
             strcat(timebuf, usecbuf);
             fprintf(stderr, "%s Sending a STREAM_ATTACH on the new path\n", timebuf);
 
-            tcpls_streams_attach(tcpls->tls, 0, 1);
+            ret = tcpls_streams_attach(tcpls->tls, 0, 1);
+            if (ret) {
+              fprintf(stderr, "Attaching stream failed %d", ret);
+              perror("Attaching stream failed");
+            }
             /** Close the stream on the initial connection */
             streamid_t *streamid2 = list_get(data->streamlist, 0);
             if (test == T_MULTIPATH)
