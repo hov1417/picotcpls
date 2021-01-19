@@ -161,7 +161,9 @@ static int handle_mpjoin(tcpls_t *tcpls, int socket, uint8_t *connid, uint8_t *c
       for (int j = 0; j < conntcpls->size; j++) {
         ctcpls2 = list_get(conntcpls, j);
         if (ctcpls2->tcpls == tcpls) {
-          tcpls_free(ctcpls2->tcpls);
+          // HUNT BUG later! => you cannot free it now, since
+          // we still need tcpls->tls to finish the handshake
+          /*tcpls_free(ctcpls2->tcpls);*/
           ctcpls2->tcpls = ctcpls->tcpls;
         }
       }
@@ -738,7 +740,9 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
     gettimeofday(&t_now, NULL);
     struct timeval diff = timediff(&t_now, &t_init);
     /** We test a migration */
-    if ((received_data >= 21457280 && ((test == T_MULTIPATH && !has_migrated) || (test == T_AGGREGATION && !has_multipath))) || (test == T_AGGREGATION_TIME && !has_multipath && diff.tv_sec >= 5)) {
+    if ((received_data >= 21457280 && ((test == T_MULTIPATH && !has_migrated) ||
+            (test == T_AGGREGATION && !has_multipath))) || (test ==
+            T_AGGREGATION_TIME && !has_multipath && diff.tv_sec >= 5)) {
       if (test == T_MULTIPATH)
         has_migrated = 1;
       else

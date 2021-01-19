@@ -15,7 +15,7 @@ parser.add_argument("--oname", type=str, help="output figure  name")
 
 parser.add_argument("-i", type=float, default=0.1, help="Time interval on which each bandwidth datapoint is computed")
 parser.add_argument("--event_at", type=str, nargs="+", help="Event happened at? in\
-                    second")
+                    second", default=[])
 parser.add_argument("--event_text", type=str, nargs="+", help="Event text linked to the event_at")
 parser.add_argument("--event_pos", type=int, nargs="+", help="Event text position on the y axis")
 
