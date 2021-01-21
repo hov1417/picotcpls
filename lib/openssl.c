@@ -229,7 +229,7 @@ static int x9_62_create_context(ptls_key_exchange_algorithm_t *algo, struct st_x
 
     ret = 0;
 Exit:
-    if (ret != 0) {
+    if (ret != 0 && *ctx != NULL) {
         x9_62_free_context(*ctx);
         *ctx = NULL;
     }
@@ -768,6 +768,7 @@ static int bfecb_setup_crypto(ptls_cipher_context_t *ctx, int is_enc, const void
 struct aead_crypto_context_t {
     ptls_aead_context_t super;
     EVP_CIPHER_CTX *evp_ctx;
+    uint8_t static_iv[PTLS_MAX_IV_SIZE];
 };
 
 static void aead_dispose_crypto(ptls_aead_context_t *_ctx)
@@ -778,12 +779,22 @@ static void aead_dispose_crypto(ptls_aead_context_t *_ctx)
         EVP_CIPHER_CTX_free(ctx->evp_ctx);
 }
 
-static void aead_do_encrypt_init(ptls_aead_context_t *_ctx, const void *iv, const void *aad, size_t aadlen)
+static void aead_xor_iv(ptls_aead_context_t *_ctx, const void *_bytes, size_t len)
 {
     struct aead_crypto_context_t *ctx = (struct aead_crypto_context_t *)_ctx;
+    const uint8_t *bytes = _bytes;
+
+    for (size_t i = 0; i < len; ++i)
+        ctx->static_iv[i] ^= bytes[i];
+}
+
+static void aead_do_encrypt_init(ptls_aead_context_t *_ctx, uint64_t seq, const void *aad, size_t aadlen)
+{
+    struct aead_crypto_context_t *ctx = (struct aead_crypto_context_t *)_ctx;
+    uint8_t iv[PTLS_MAX_IV_SIZE];
     int ret;
 
-    /* FIXME for performance, preserve the expanded key instead of the raw key */
+    ptls_aead__build_iv(ctx->super.algo, iv, ctx->static_iv, seq);
     ret = EVP_EncryptInit_ex(ctx->evp_ctx, NULL, NULL, NULL, iv);
     assert(ret);
 
@@ -822,17 +833,18 @@ static size_t aead_do_encrypt_final(ptls_aead_context_t *_ctx, void *_output)
     return off;
 }
 
-static size_t aead_do_decrypt(ptls_aead_context_t *_ctx, void *_output, const void *input, size_t inlen, const void *iv,
+static size_t aead_do_decrypt(ptls_aead_context_t *_ctx, void *_output, const void *input, size_t inlen, uint64_t seq,
                               const void *aad, size_t aadlen)
 {
     struct aead_crypto_context_t *ctx = (struct aead_crypto_context_t *)_ctx;
-    uint8_t *output = _output;
+    uint8_t *output = _output, iv[PTLS_MAX_IV_SIZE];
     size_t off = 0, tag_size = ctx->super.algo->tag_size;
     int blocklen, ret;
 
     if (inlen < tag_size)
         return SIZE_MAX;
 
+    ptls_aead__build_iv(ctx->super.algo, iv, ctx->static_iv, seq);
     ret = EVP_DecryptInit_ex(ctx->evp_ctx, NULL, NULL, NULL, iv);
     assert(ret);
     if (aadlen != 0) {
@@ -851,16 +863,22 @@ static size_t aead_do_decrypt(ptls_aead_context_t *_ctx, void *_output, const vo
     return off;
 }
 
-static int aead_setup_crypto(ptls_aead_context_t *_ctx, int is_enc, const void *key, const EVP_CIPHER *cipher)
+static int aead_setup_crypto(ptls_aead_context_t *_ctx, int is_enc, const void *key, const void *iv, const EVP_CIPHER *cipher)
 {
     struct aead_crypto_context_t *ctx = (struct aead_crypto_context_t *)_ctx;
     int ret;
 
+    memcpy(ctx->static_iv, iv, ctx->super.algo->iv_size);
+    if (key == NULL)
+        return 0;
+
     ctx->super.dispose_crypto = aead_dispose_crypto;
+    ctx->super.do_xor_iv = aead_xor_iv;
     if (is_enc) {
         ctx->super.do_encrypt_init = aead_do_encrypt_init;
         ctx->super.do_encrypt_update = aead_do_encrypt_update;
         ctx->super.do_encrypt_final = aead_do_encrypt_final;
+        ctx->super.do_encrypt = ptls_aead__do_encrypt;
         ctx->super.do_decrypt = NULL;
     } else {
         ctx->super.do_encrypt_init = NULL;
@@ -897,20 +915,20 @@ Error:
     return ret;
 }
 
-static int aead_aes128gcm_setup_crypto(ptls_aead_context_t *ctx, int is_enc, const void *key)
+static int aead_aes128gcm_setup_crypto(ptls_aead_context_t *ctx, int is_enc, const void *key, const void *iv)
 {
-    return aead_setup_crypto(ctx, is_enc, key, EVP_aes_128_gcm());
+    return aead_setup_crypto(ctx, is_enc, key, iv, EVP_aes_128_gcm());
 }
 
-static int aead_aes256gcm_setup_crypto(ptls_aead_context_t *ctx, int is_enc, const void *key)
+static int aead_aes256gcm_setup_crypto(ptls_aead_context_t *ctx, int is_enc, const void *key, const void *iv)
 {
-    return aead_setup_crypto(ctx, is_enc, key, EVP_aes_256_gcm());
+    return aead_setup_crypto(ctx, is_enc, key, iv, EVP_aes_256_gcm());
 }
 
 #if PTLS_OPENSSL_HAVE_CHACHA20_POLY1305
-static int aead_chacha20poly1305_setup_crypto(ptls_aead_context_t *ctx, int is_enc, const void *key)
+static int aead_chacha20poly1305_setup_crypto(ptls_aead_context_t *ctx, int is_enc, const void *key, const void *iv)
 {
-    return aead_setup_crypto(ctx, is_enc, key, EVP_chacha20_poly1305());
+    return aead_setup_crypto(ctx, is_enc, key, iv, EVP_chacha20_poly1305());
 }
 #endif
 
@@ -1226,14 +1244,6 @@ Exit:
     return ret;
 }
 
-static void cleanup_cipher_ctx(EVP_CIPHER_CTX *ctx)
-{
-    if (!EVP_CIPHER_CTX_reset(ctx)) {
-        fprintf(stderr, "EVP_CIPHER_CTX_reset() failed\n");
-        abort();
-    }
-}
-
 int ptls_openssl_init_verify_certificate(ptls_openssl_verify_certificate_t *self, X509_STORE *store)
 {
     *self = (ptls_openssl_verify_certificate_t){{verify_cert}};
@@ -1333,7 +1343,7 @@ int ptls_openssl_encrypt_ticket(ptls_buffer_t *buf, ptls_iovec_t src,
 
 Exit:
     if (cctx != NULL)
-        cleanup_cipher_ctx(cctx);
+        EVP_CIPHER_CTX_free(cctx);
     if (hctx != NULL)
         HMAC_CTX_free(hctx);
     return ret;
@@ -1403,7 +1413,7 @@ int ptls_openssl_decrypt_ticket(ptls_buffer_t *buf, ptls_iovec_t src,
 
 Exit:
     if (cctx != NULL)
-        cleanup_cipher_ctx(cctx);
+        EVP_CIPHER_CTX_free(cctx);
     if (hctx != NULL)
         HMAC_CTX_free(hctx);
     return ret;
@@ -1429,6 +1439,8 @@ ptls_cipher_algorithm_t ptls_openssl_aes128ecb = {
 ptls_cipher_algorithm_t ptls_openssl_aes128ctr = {
     "AES128-CTR", PTLS_AES128_KEY_SIZE, 1, PTLS_AES_IV_SIZE, sizeof(struct cipher_context_t), aes128ctr_setup_crypto};
 ptls_aead_algorithm_t ptls_openssl_aes128gcm = {"AES128-GCM",
+                                                PTLS_AESGCM_CONFIDENTIALITY_LIMIT,
+                                                PTLS_AESGCM_INTEGRITY_LIMIT,
                                                 &ptls_openssl_aes128ctr,
                                                 &ptls_openssl_aes128ecb,
                                                 PTLS_AES128_KEY_SIZE,
@@ -1443,6 +1455,8 @@ ptls_cipher_algorithm_t ptls_openssl_aes256ctr = {
     "AES256-CTR",          PTLS_AES256_KEY_SIZE, 1 /* block size */, PTLS_AES_IV_SIZE, sizeof(struct cipher_context_t),
     aes256ctr_setup_crypto};
 ptls_aead_algorithm_t ptls_openssl_aes256gcm = {"AES256-GCM",
+                                                PTLS_AESGCM_CONFIDENTIALITY_LIMIT,
+                                                PTLS_AESGCM_INTEGRITY_LIMIT,
                                                 &ptls_openssl_aes256ctr,
                                                 &ptls_openssl_aes256ecb,
                                                 PTLS_AES256_KEY_SIZE,
@@ -1463,6 +1477,8 @@ ptls_cipher_algorithm_t ptls_openssl_chacha20 = {
     "CHACHA20",           PTLS_CHACHA20_KEY_SIZE, 1 /* block size */, PTLS_CHACHA20_IV_SIZE, sizeof(struct cipher_context_t),
     chacha20_setup_crypto};
 ptls_aead_algorithm_t ptls_openssl_chacha20poly1305 = {"CHACHA20-POLY1305",
+                                                       PTLS_CHACHA20POLY1305_CONFIDENTIALITY_LIMIT,
+                                                       PTLS_CHACHA20POLY1305_INTEGRITY_LIMIT,
                                                        &ptls_openssl_chacha20,
                                                        NULL,
                                                        PTLS_CHACHA20_KEY_SIZE,
