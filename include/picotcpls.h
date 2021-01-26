@@ -230,6 +230,8 @@ struct st_tcpls_t {
   uint32_t gap_size;
   /* max_gap size until shift_buffer */
   uint32_t max_gap_size;
+  /* gap offset for dataposition */
+  uint64_t gap_offset;
   /** A priority queue to handle reording records */
   heap *priority_q;
   /** sending mpseq number */

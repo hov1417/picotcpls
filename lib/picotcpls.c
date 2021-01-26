@@ -1891,9 +1891,10 @@ static int multipath_merge_buffers(tcpls_t *tcpls, ptls_buffer_t *decryptbuf) {
   int ret;
   if (heap_size(tcpls->priority_q) > 0) {
     uint32_t *mpseq;
-    uint32_t *buf_position_data;
+    uint64_t *buf_position_data;
     ret = heap_min(tcpls->priority_q, (void **) &mpseq, (void **)&buf_position_data);
     while (ret && *mpseq == tcpls->next_expected_mpseq) {
+      *buf_position_data = *buf_position_data - tcpls->gap_offset;
       size_t *length = (size_t *) malloc(sizeof(size_t));
       *length = *(size_t *) (tcpls->rec_reordering->base+*buf_position_data);
       ptls_buffer_pushv(decryptbuf, tcpls->rec_reordering->base+*buf_position_data+sizeof(size_t), *length);
@@ -1903,6 +1904,7 @@ static int multipath_merge_buffers(tcpls_t *tcpls, ptls_buffer_t *decryptbuf) {
       free(mpseq);
       /*free(buf_position_data);*/
       ret = heap_min(tcpls->priority_q, (void **) &mpseq, (void **) &buf_position_data);
+
     }
   }
   /** we have nothing left in the heap and no fragments, we can clean rec_reordering! */
@@ -1916,12 +1918,12 @@ static int multipath_merge_buffers(tcpls_t *tcpls, ptls_buffer_t *decryptbuf) {
   }
   else {
     /** Check whether we can memmove rec_reordering buffer */
-    uint32_t *buf_position_data;
+    uint64_t *buf_position_data;
     size_t *length;
     ret = heap_min(tcpls->gap_rec_reordering, (void **) &buf_position_data, (void **) &length);
-    uint64_t offset = (uint64_t) tcpls->rec_reordering->base;
-    while (ret && *buf_position_data == (uint64_t) tcpls->gap_size+offset) {
+    while (ret && *buf_position_data == tcpls->gap_size) {
       tcpls->gap_size += *length;
+      tcpls->gap_size += sizeof(size_t);
       heap_delmin(tcpls->gap_rec_reordering, (void **) &buf_position_data, (void**) &length);
       free(length);
       free(buf_position_data);
@@ -1929,6 +1931,7 @@ static int multipath_merge_buffers(tcpls_t *tcpls, ptls_buffer_t *decryptbuf) {
     }
     if (tcpls->gap_size >= tcpls->max_gap_size) {
       shift_buffer(tcpls->rec_reordering, tcpls->gap_size);
+      tcpls->gap_offset += tcpls->gap_size;
       tcpls->gap_size = 0;
     }
   }
@@ -2553,8 +2556,8 @@ int handle_tcpls_data_record(ptls_t *tls, struct st_ptls_record_t *rec)
           sizeof(rec->length));
       ptls_buffer_pushv(tcpls->rec_reordering, rec->fragment, rec->length);
       /** contains length + payload, point to the length*/
-      uint32_t *buf_position_data = (uint32_t*) malloc(sizeof(uint32_t));
-      *buf_position_data = tcpls->rec_reordering->off-rec->length-sizeof(rec->length);
+      uint64_t *buf_position_data = (uint64_t*) malloc(sizeof(uint32_t));
+      *buf_position_data = tcpls->rec_reordering->off-rec->length-sizeof(rec->length) + tcpls->gap_offset;
       heap_insert(tcpls->priority_q, (void *)mpseq_ptr, (void*)buf_position_data);
       ret = 1;
     }
