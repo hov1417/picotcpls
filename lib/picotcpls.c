@@ -93,7 +93,8 @@ static int handle_connect(tcpls_t *tcpls, tcpls_v4_addr_t *src, tcpls_v4_addr_t
   *dest, tcpls_v6_addr_t *src6, tcpls_v6_addr_t *dest6, unsigned short sa_family,
   int *nfds, connect_info_t *coninfo);
 static int multipath_merge_buffers(tcpls_t *tcpls, ptls_buffer_t *decryptbuf);
-static int cmp_mpseq(void *mpseq1, void *mpseq2);
+static int cmp_uint32(void *mpseq1, void *mpseq2);
+static void free_heap_key_value(void *key, void *val);
 static int check_con_has_connected(tcpls_t *tcpls, connect_info_t *con, int *res);
 static void compute_client_rtt(connect_info_t *con, struct timeval *timeout,
   struct timeval *t_initial, struct timeval *t_previous);
@@ -140,6 +141,9 @@ void *tcpls_new(void *ctx, int is_server) {
   tcpls->recvbuflen = 32*PTLS_MAX_ENCRYPTED_RECORD_SIZE;
   tcpls->recvbuf = malloc(tcpls->recvbuflen);
   tcpls->rec_reordering = malloc(sizeof(*tcpls->rec_reordering));
+  tcpls->gap_rec_reordering = malloc(sizeof(*tcpls->gap_rec_reordering));
+  heap_create(tcpls->gap_rec_reordering, 0, cmp_uint32);
+  tcpls->max_gap_size = PTLS_MAX_PLAINTEXT_RECORD_SIZE * 256;
   tcpls->buffrag = malloc(sizeof(*tcpls->buffrag));
   ptls_buffer_init(tcpls->buffrag, "", 0);
   if (ptls_buffer_reserve(tcpls->buffrag, 5) != 0)
@@ -150,7 +154,7 @@ void *tcpls_new(void *ctx, int is_server) {
   /** From the heap API, a NULL cmp function compares keys as integers, which is
    * what we need */
   tcpls->priority_q = malloc(sizeof(*tcpls->priority_q));
-  heap_create(tcpls->priority_q, 0, cmp_mpseq);
+  heap_create(tcpls->priority_q, 0, cmp_uint32);
   tcpls->tcpls_options = new_list(sizeof(tcpls_options_t), NBR_SUPPORTED_TCPLS_OPTIONS);
   tcpls->streams = new_list(sizeof(tcpls_stream_t), 3);
   tcpls->connect_infos = new_list(sizeof(connect_info_t), 2);
@@ -1524,7 +1528,7 @@ int ptls_set_bpf_cc(ptls_t *ptls, const uint8_t *bpf_prog_bytecode, size_t bytec
 
 /*===================================Internal========================================*/
 
-static int cmp_mpseq(void *mpseq1, void *mpseq2) {
+static int cmp_uint32(void *mpseq1, void *mpseq2) {
 
   register uint32_t key1_v = *((uint32_t*)mpseq1);
   register uint32_t key2_v = *((uint32_t*)mpseq2);
@@ -1890,18 +1894,44 @@ static int multipath_merge_buffers(tcpls_t *tcpls, ptls_buffer_t *decryptbuf) {
     uint32_t *buf_position_data;
     ret = heap_min(tcpls->priority_q, (void **) &mpseq, (void **)&buf_position_data);
     while (ret && *mpseq == tcpls->next_expected_mpseq) {
-      size_t length = *(size_t *) (tcpls->rec_reordering->base+*buf_position_data);
-      ptls_buffer_pushv(decryptbuf, tcpls->rec_reordering->base+*buf_position_data+sizeof(size_t), length);
+      size_t *length = (size_t *) malloc(sizeof(size_t));
+      *length = *(size_t *) (tcpls->rec_reordering->base+*buf_position_data);
+      ptls_buffer_pushv(decryptbuf, tcpls->rec_reordering->base+*buf_position_data+sizeof(size_t), *length);
       heap_delmin(tcpls->priority_q, (void**)&mpseq, (void**)&buf_position_data);
       tcpls->next_expected_mpseq++;
+      heap_insert(tcpls->gap_rec_reordering, (void *) buf_position_data, (void *) length);
       free(mpseq);
-      free(buf_position_data);
+      /*free(buf_position_data);*/
       ret = heap_min(tcpls->priority_q, (void **) &mpseq, (void **) &buf_position_data);
     }
   }
   /** we have nothing left in the heap and no fragments, we can clean rec_reordering! */
-  if (heap_size(tcpls->priority_q) == 0 && tcpls->rec_reordering->off)
+  if (heap_size(tcpls->priority_q) == 0 && tcpls->rec_reordering->off) {
     ptls_buffer_dispose(tcpls->rec_reordering);
+    /** reinit the gap heap */
+    heap_foreach(tcpls->gap_rec_reordering, &free_heap_key_value);
+    heap_destroy(tcpls->gap_rec_reordering);
+    heap_create(tcpls->gap_rec_reordering, 0, cmp_uint32);
+    tcpls->gap_size = 0;
+  }
+  else {
+    /** Check whether we can memmove rec_reordering buffer */
+    uint32_t *buf_position_data;
+    size_t *length;
+    ret = heap_min(tcpls->gap_rec_reordering, (void **) &buf_position_data, (void **) &length);
+    uint64_t offset = (uint64_t) tcpls->rec_reordering->base;
+    while (ret && *buf_position_data == (uint64_t) tcpls->gap_size+offset) {
+      tcpls->gap_size += *length;
+      heap_delmin(tcpls->gap_rec_reordering, (void **) &buf_position_data, (void**) &length);
+      free(length);
+      free(buf_position_data);
+      ret = heap_min(tcpls->gap_rec_reordering, (void **) &buf_position_data, (void **) &length);
+    }
+    if (tcpls->gap_size >= tcpls->max_gap_size) {
+      shift_buffer(tcpls->rec_reordering, tcpls->gap_size);
+      tcpls->gap_size = 0;
+    }
+  }
   return decryptbuf->off-initial_pos;
 Exit:
   return -1;
@@ -3426,6 +3456,8 @@ void tcpls_free(tcpls_t *tcpls) {
   free(tcpls->rec_reordering);
   heap_foreach(tcpls->priority_q, &free_heap_key_value);
   heap_destroy(tcpls->priority_q);
+  heap_foreach(tcpls->gap_rec_reordering, &free_heap_key_value);
+  heap_destroy(tcpls->gap_rec_reordering);
   free(tcpls->priority_q);
   tcpls_stream_t *stream;
   for (int i = 0; i < tcpls->streams->size; i++) {

@@ -31,8 +31,8 @@
 
 #define SENDING_ACKS_RECORDS_WINDOW 16
 
-// MAX_ENCRYPTED_RECORD_SIZE * 16
-#define SENDING_ACKS_BYTES_WINDOW 266240
+// MAX_ENCRYPTED_RECORD_SIZE * 15
+#define SENDING_ACKS_BYTES_WINDOW 249600
 
 /** TCPLS messages we would support in the TLS context */
 typedef enum tcpls_enum_t {
@@ -223,6 +223,13 @@ struct st_tcpls_t {
   ptls_buffer_t *buffrag;
   /* Record buffer for multipath reordering */
   ptls_buffer_t *rec_reordering;
+  /* store buf_position_data */
+  heap *gap_rec_reordering;
+  /* Current gap_size -- i.e., the amount of data we can safefely shift the
+   * reordering buffer*/
+  uint32_t gap_size;
+  /* max_gap size until shift_buffer */
+  uint32_t max_gap_size;
   /** A priority queue to handle reording records */
   heap *priority_q;
   /** sending mpseq number */
