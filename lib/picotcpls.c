@@ -2,8 +2,9 @@
  * \file picotcpls.c
  *
  * \brief Implement logic for setting, sending, receiving and processing TCP
- * options through the TLS layer, as well as offering a wrapper for the
- * transport protocol and expose only one interface to the application layer
+ * options and TCPLS messages through the TLS layer, as well as offering a
+ * wrapper for the transport protocol and expose only one interface to the
+ * application layer
  *
  * This file defines an API exposed to the application
  * <ul>
@@ -14,37 +15,37 @@
  *   <li> tcpls_accept </li>
  *   <li> tcpls_handshake </li>
  *   <li> tcpls_send </li>
-*   <li> tcpls_receive </li>
-*   <li> tcpls_stream_new </li> (Optional)
-*   <li> tcpls_streams_attach </li> (Optional)
-*   <li> tcpls_stream_close </li> (Optional)
-*   <li> tcpls_free </li>
-* </ul>
-*
-* Callbacks can be attached to message events happening within TCPLS. E.g.,
-* upon a new stream attachment, a fonction provided by the application might be
-* called and would be passed information about the particular event.
-*
-* We also offer an API to set localy and/or to the
-* peer some TCP options. We currently support the following options:
-*
-* <ul>
-*    <li> User Timeout RFC5482 </li>
-*    <li> Failover </li>
-*    <li> BPF injection of a Congestion Control scheme (kernel >= 5.6)  </li>
-* </ul>
-*
-* To set up a TCP option, the application layer should first turns on
-* ctx->support_tcpls_options = 1; which will advertise to the peer the
-* capability of handling TCPLS. Then, we may set locally or remotly TCP options
-* by doing:
-*
-* ptls_set_[OPTION]
-* and then
-*
-* tcpls_send_tcpotion(...)
-*
-*/
+ *   <li> tcpls_receive </li>
+ *   <li> tcpls_stream_new </li> (Optional)
+ *   <li> tcpls_streams_attach </li> (Optional)
+ *   <li> tcpls_stream_close </li> (Optional)
+ *   <li> tcpls_free </li>
+ * </ul>
+ *
+ * Callbacks can be attached to message events happening within TCPLS. E.g.,
+ * upon a new stream attachment, a fonction provided by the application might be
+ * called and would be passed information about the particular event.
+ *
+ * We also offer an API to set localy and/or to the
+ * peer some TCP options. We currently support the following options:
+ *
+ * <ul>
+ *    <li> User Timeout RFC5482 </li>
+ *    <li> Failover </li>
+ *    <li> BPF injection of a Congestion Control scheme (kernel >= 5.6)  </li>
+ * </ul>
+ *
+ * To set up a TCP option, the application layer should first turns on
+ * ctx->support_tcpls_options = 1; which will advertise to the peer the
+ * capability of handling TCPLS. Then, we may set locally or remotly TCP options
+ * by doing:
+ *
+ * ptls_set_[OPTION]
+ * and then
+ *
+ * tcpls_send_tcpotion(...)
+ *
+ */
 
 #include <arpa/inet.h>
 #include <linux/bpf.h>
@@ -110,6 +111,7 @@ static int send_unacked_data(tcpls_t *tcpls, tcpls_stream_t *stream, connect_inf
 static int do_send(tcpls_t *tcpls, tcpls_stream_t *stream, connect_info_t *con);
 static int initiate_recovering(tcpls_t *tcpls, connect_info_t *con);
 static int try_decrypt_with_multistreams(tcpls_t *tcpls, const void *input, ptls_buffer_t *decryptbuf,  size_t *input_off, size_t input_size);
+
 /**
 * Create a new TCPLS object
 */
@@ -151,8 +153,6 @@ void *tcpls_new(void *ctx, int is_server) {
   tcpls->tls = tls;
   ptls_buffer_init(tcpls->sendbuf, "", 0);
   ptls_buffer_init(tcpls->rec_reordering, "", 0);
-  /** From the heap API, a NULL cmp function compares keys as integers, which is
-   * what we need */
   tcpls->priority_q = malloc(sizeof(*tcpls->priority_q));
   heap_create(tcpls->priority_q, 0, cmp_uint32);
   tcpls->tcpls_options = new_list(sizeof(tcpls_options_t), NBR_SUPPORTED_TCPLS_OPTIONS);
@@ -178,7 +178,6 @@ int static add_v4_to_options(tcpls_t *tcpls, uint8_t n) {
     i++;
     current = current->next;
   }
-  /** TODO, check what bit ordering to do here */
   addresses[0] = n;
   return tcpls_init_context(tcpls->tls, addresses, n*sizeof(struct in_addr)+1, MULTIHOMING_v4, 0, 1);
 }
@@ -307,10 +306,6 @@ int tcpls_add_v6(ptls_t *tls, struct sockaddr_in6 *addr, int is_primary, int
   current->next = new_v6;
   if (settopeer)
     return add_v6_to_options(tcpls, n);
-  return 0;
-}
-/** For connect-by-name sparing 2-RTT logic! Much much further work */
-int tcpls_add_domain(ptls_t *tls, char* domain) {
   return 0;
 }
 
@@ -500,8 +495,6 @@ int tcpls_connect(ptls_t *tls, struct sockaddr *src, struct sockaddr *dest,
  * Client-side: the client must provide handshake properties for MPJOIN
  * handshake
  */
-
-// TODO move socket in handshake properties
 
 int tcpls_handshake(ptls_t *tls, ptls_handshake_properties_t *properties) {
   tcpls_t *tcpls = tls->tcpls;
@@ -961,6 +954,8 @@ int tcpls_accept(tcpls_t *tcpls, int socket, uint8_t *cookie, uint32_t transport
  * src might be NULL to indicate default
  *
  * returns 0 if a stream is alreay attached for addr, or if some error occured
+ * 
+ * XXX create a stream to a transport id instread of addresses!
  */
 
 streamid_t tcpls_stream_new(ptls_t *tls, struct sockaddr *src, struct sockaddr *dest) {
@@ -1060,7 +1055,7 @@ streamid_t tcpls_stream_new(ptls_t *tls, struct sockaddr *src, struct sockaddr *
  * sendnow instructs TCPLS to send the control message right now. If set to 0,
  * then the stream control message will be sent alongside the data within the
  * the first call to tcpls_send over the right streamid
- * 
+ *
  * Note, if stream attach events have not been sent, the application cannot use
  * the streamid to send messages
  */
@@ -1197,7 +1192,6 @@ int tcpls_send(ptls_t *tls, streamid_t streamid, const void *input, size_t nbyte
     connect_info_t *con = get_primary_con_info(tcpls);
     assert(con);
     stream = stream_new(tls, tcpls->next_stream_id++, con, 1);
-    fprintf(stderr, "automaticaly creating a stream sender side %u\n", stream->streamid);
     if (tls->ctx->stream_event_cb) {
       tls->ctx->stream_event_cb(tcpls, STREAM_OPENED, stream->streamid, con->this_transportid,
           tls->ctx->cb_data);
@@ -1568,8 +1562,8 @@ static int try_decrypt_with_multistreams(tcpls_t *tcpls, const void *input,
     if (con->this_transportid == stream->transportid) {
       ptls_aead_context_t *remember_aead = tcpls->tls->traffic_protection.dec.aead;
       // get the right  aead context matching the stream id
-      // This is done for compabitility with original PTLS's unit tests
-      /** We possible have not stream attached server-side */
+      // This is done for compatibility with original PTLS's unit tests
+      /** We might have no stream attached server-side */
       tcpls->tls->traffic_protection.dec.aead = stream->aead_dec;
       tcpls->streamid_rcv = stream->streamid;
       do {
@@ -1643,7 +1637,6 @@ static int do_send(tcpls_t *tcpls, tcpls_stream_t *stream, connect_info_t *con) 
 
 static int initiate_recovering(tcpls_t *tcpls, connect_info_t *con) {
   /** If failover is enabled and we are the client, let's connect again */
-  fprintf(stderr,"initiate recovering\n");
   errno = 0;
   int ret = 1;
   connection_fail(tcpls, con);
@@ -2305,7 +2298,6 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
       {
         uint32_t peer_transportid = *(uint32_t*) input;
         connect_info_t *con = connection_get(ptls->tcpls, ptls->tcpls->transportid_rcv);
-        fprintf(stderr, "peer transport id was %d, now %d\n", con->peer_transportid, peer_transportid);
         if (!con)
           return PTLS_ERROR_CONN_NOT_FOUND;
         con->peer_transportid = peer_transportid;
@@ -2358,7 +2350,6 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
           }
         }
         if (!found) {
-          fprintf(stdout, "STREAM_ATTACH to a connection not found. Streamid %u, peer_transport id %d\n", streamid, peer_transportid);
           return PTLS_ERROR_CONN_NOT_FOUND;
         }
         /** an absolute number that should not reduce at stream close */
