@@ -815,7 +815,6 @@ int tcpls_accept(tcpls_t *tcpls, int socket, uint8_t *cookie, uint32_t transport
     struct sockaddr_in *addr_in = (struct sockaddr_in *) &peer_sockaddr;
     char *s = malloc(INET_ADDRSTRLEN);
     inet_ntop(AF_INET, &(addr_in->sin_addr), s, INET_ADDRSTRLEN);
-    fprintf(stderr, "IP address: %s\n", s);
     free(s);
     ret = tcpls_add_v4(tcpls->tls, (struct sockaddr_in*) &peer_sockaddr, 0, 0, 0);
   }
@@ -1193,7 +1192,6 @@ int tcpls_send(ptls_t *tls, streamid_t streamid, const void *input, size_t nbyte
     connect_info_t *con = get_primary_con_info(tcpls);
     assert(con);
     stream = stream_new(tls, tcpls->next_stream_id++, con, 1);
-    fprintf(stderr, "automaticaly creating a stream sender side %u\n", stream->streamid);
     if (tls->ctx->stream_event_cb) {
       tls->ctx->stream_event_cb(tcpls, STREAM_OPENED, stream->streamid, con->this_transportid,
           tls->ctx->cb_data);
@@ -1639,7 +1637,6 @@ static int do_send(tcpls_t *tcpls, tcpls_stream_t *stream, connect_info_t *con) 
 
 static int initiate_recovering(tcpls_t *tcpls, connect_info_t *con) {
   /** If failover is enabled and we are the client, let's connect again */
-  fprintf(stderr,"initiate recovering\n");
   errno = 0;
   int ret = 1;
   connection_fail(tcpls, con);
@@ -2272,7 +2269,6 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
       {
         uint32_t peer_transportid = *(uint32_t*) input;
         connect_info_t *con = connection_get(ptls->tcpls, ptls->tcpls->transportid_rcv);
-        fprintf(stderr, "peer transport id was %d, now %d\n", con->peer_transportid, peer_transportid);
         if (!con)
           return PTLS_ERROR_CONN_NOT_FOUND;
         con->peer_transportid = peer_transportid;

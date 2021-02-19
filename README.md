@@ -3,11 +3,11 @@ picotcpls
 
 Picotcpls is a fork of [picotls](https://github.com/h2o/picotls), a  [TLS 1.3 (RFC 8446)](https://tools.ietf.org/html/rfc8446) protocol stack written in C, with the following features:
 
-<<<<<<< HEAD
 * From picotls:
   * support for two crypto engines
     * "OpenSSL" backend using libcrypto for crypto and X.509 operations
     * "minicrypto" backend using [cifra](https://github.com/ctz/cifra) for most crypto and [micro-ecc](https://github.com/kmackay/micro-ecc) for secp256r1
+    * ["fusion" AES-GCM engine, optimized for QUIC and other protocols that use short AEAD blocks](https://github.com/h2o/picotls/pull/310)
   * support for PSK, PSK-DHE resumption using 0-RTT
   * API for dealing directly with TLS handshake messages (essential for QUIC)
   * support for new extensions: Encrypted SNI (wg-draft-02), Certificate Compression (wg-draft-10)
@@ -24,19 +24,9 @@ Picotcpls is a fork of [picotls](https://github.com/h2o/picotls), a  [TLS 1.3 (R
   * Application-level Connection Migration (simplistic API code flow to
     trigger a migration)
   * Multipath
-  * (ongoing: A Failover mechanism; a kind of automatic connection
+  * A Failover mechanism; a kind of automatic connection
     migration in case of network failure)
-  * (ongoing: Authenticated connection closing)
-=======
-Picotls is a [TLS 1.3 (RFC 8446)](https://tools.ietf.org/html/rfc8446) protocol stack written in C, with the following features:
-* support for three crypto engines
-  * "OpenSSL" backend using libcrypto for crypto and X.509 operations
-  * "minicrypto" backend using [cifra](https://github.com/ctz/cifra) for most crypto and [micro-ecc](https://github.com/kmackay/micro-ecc) for secp256r1
-  * ["fusion" AES-GCM engine, optimized for QUIC and other protocols that use short AEAD blocks](https://github.com/h2o/picotls/pull/310)
-* support for PSK, PSK-DHE resumption using 0-RTT
-* API for dealing directly with TLS handshake messages (essential for QUIC)
-* support for new extensions: Encrypted SNI (wg-draft-02), Certificate Compression (wg-draft-10)
->>>>>>> d5e32519516e13520ddeffa85da97d2398197df2
+  * Authenticated connection closing
 
 
 picotcpls is a research-level implementation of TCPLS, a novel
