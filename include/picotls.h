@@ -32,6 +32,7 @@ extern "C" {
 
 #include <assert.h>
 #include <inttypes.h>
+#include <string.h>
 #include <sys/types.h>
 #include <stddef.h>
 #include "picotcpls.h"
@@ -47,8 +48,13 @@ extern "C" {
 #define PTLS_BUILD_ASSERT(cond) 1
 #endif
 
-/* __builtin_types_compatible_p yields incorrect results when older versions of GCC is used; see #303 */
-#if defined(__clang__) || __GNUC__ >= 6
+/* __builtin_types_compatible_p yields incorrect results when older versions of GCC is used; see #303.
+ * Clang with Xcode 9.4 or prior is known to not work correctly when a pointer is const-qualified; see
+ * https://github.com/h2o/quicly/pull/306#issuecomment-626037269. Older versions of clang upstream works fine, but we do not need
+ * best coverage. This macro is for preventing misuse going into the master branch, having it work one of the compilers supported in
+ * our CI is enough.
+ */
+#if ((defined(__clang__) && __clang_major__ >= 10) || __GNUC__ >= 6) && !defined(__cplusplus)
 #define PTLS_ASSERT_IS_ARRAY_EXPR(a) PTLS_BUILD_ASSERT_EXPR(__builtin_types_compatible_p(__typeof__(a[0])[], __typeof__(a)))
 #else
 #define PTLS_ASSERT_IS_ARRAY_EXPR(a) 1
@@ -74,11 +80,17 @@ extern "C" {
 #define PTLS_AES_IV_SIZE 16
 #define PTLS_AESGCM_IV_SIZE 12
 #define PTLS_AESGCM_TAG_SIZE 16
+#define PTLS_AESGCM_CONFIDENTIALITY_LIMIT 0x2000000            /* 2^25 */
+#define PTLS_AESGCM_INTEGRITY_LIMIT UINT64_C(0x40000000000000) /* 2^54 */
+#define PTLS_AESCCM_CONFIDENTIALITY_LIMIT 0xB504F3             /* 2^23.5 */
+#define PTLS_AESCCM_INTEGRITY_LIMIT 0xB504F3                   /* 2^23.5 */
 
 #define PTLS_CHACHA20_KEY_SIZE 32
 #define PTLS_CHACHA20_IV_SIZE 16
 #define PTLS_CHACHA20POLY1305_IV_SIZE 12
 #define PTLS_CHACHA20POLY1305_TAG_SIZE 16
+#define PTLS_CHACHA20POLY1305_CONFIDENTIALITY_LIMIT UINT64_MAX       /* at least 2^64 */
+#define PTLS_CHACHA20POLY1305_INTEGRITY_LIMIT UINT64_C(0x1000000000) /* 2^36 */
 
 #define PTLS_BLOWFISH_KEY_SIZE 16
 #define PTLS_BLOWFISH_BLOCK_SIZE 8
@@ -398,22 +410,30 @@ extern "C" {
     int (*setup_crypto)(ptls_cipher_context_t *ctx, int is_enc, const void *key);
   } ptls_cipher_algorithm_t;
 
-  /**
-   * AEAD context. AEAD implementations are allowed to stuff data at the end of the struct. The size of the memory allocated for the
-   * struct is governed by ptls_aead_algorithm_t::context_size.
-   */
-  struct st_ptls_aead_context_t {
+typedef struct st_ptls_aead_supplementary_encryption_t {
+    ptls_cipher_context_t *ctx;
+    const void *input;
+    uint8_t output[16];
+} ptls_aead_supplementary_encryption_t;
+
+/**
+ * AEAD context. AEAD implementations are allowed to stuff data at the end of the struct. The size of the memory allocated for the
+ * struct is governed by ptls_aead_algorithm_t::context_size.
+ */
+typedef struct st_ptls_aead_context_t {
     const struct st_ptls_aead_algorithm_t *algo;
-    uint8_t static_iv[PTLS_MAX_IV_SIZE];
     uint64_t seq;
     /* field above this line must not be altered by the crypto binding */
     void (*dispose_crypto)(struct st_ptls_aead_context_t *ctx);
-    void (*do_encrypt_init)(struct st_ptls_aead_context_t *ctx, const void *iv, const void *aad, size_t aadlen);
+    void (*do_xor_iv)(struct st_ptls_aead_context_t *ctx, const void * bytes, size_t len);
+    void (*do_encrypt_init)(struct st_ptls_aead_context_t *ctx, uint64_t seq, const void *aad, size_t aadlen);
     size_t (*do_encrypt_update)(struct st_ptls_aead_context_t *ctx, void *output, const void *input, size_t inlen);
     size_t (*do_encrypt_final)(struct st_ptls_aead_context_t *ctx, void *output);
-    size_t (*do_decrypt)(struct st_ptls_aead_context_t *ctx, void *output, const void *input, size_t inlen, const void *iv,
-        const void *aad, size_t aadlen);
-  };
+    void (*do_encrypt)(struct st_ptls_aead_context_t *ctx, void *output, const void *input, size_t inlen, uint64_t seq,
+                       const void *aad, size_t aadlen, ptls_aead_supplementary_encryption_t *supp);
+    size_t (*do_decrypt)(struct st_ptls_aead_context_t *ctx, void *output, const void *input, size_t inlen, uint64_t seq,
+                         const void *aad, size_t aadlen);
+} ptls_aead_context_t;
 
   /**
    * An AEAD cipher.
@@ -423,6 +443,14 @@ extern "C" {
      * name (following the convention of `openssl ciphers -v ALL`)
      */
     const char *name;
+    /**
+     * confidentiality_limit (max records / packets sent before re-key)
+     */
+    const uint64_t confidentiality_limit;
+    /**
+     * integrity_limit (max decryption failure records / packets before re-key)
+     */
+    const uint64_t integrity_limit;
     /**
      * the underlying key stream
      */
@@ -451,8 +479,8 @@ extern "C" {
     /**
      * callback that sets up the crypto
      */
-    int (*setup_crypto)(ptls_aead_context_t *ctx, int is_enc, const void *key);
-  } ptls_aead_algorithm_t;
+    int (*setup_crypto)(ptls_aead_context_t *ctx, int is_enc, const void *key, const void *iv);
+} ptls_aead_algorithm_t;
 
   /**
    *
@@ -608,6 +636,10 @@ extern "C" {
      * if ESNI was used
      */
     unsigned esni : 1;
+    /**
+     * set to 1 if ClientHello is too old (or too new) to be handled by picotls
+     */
+    unsigned incompatible_version : 1;
 } ptls_on_client_hello_parameters_t;
 
 /**
@@ -1029,6 +1061,7 @@ typedef struct st_ptls_log_event_t {
 #define MAX_CLIENT_CIPHERS 32
 
   struct st_ptls_client_hello_t {
+      uint16_t legacy_version;
       const uint8_t *random_bytes;
       ptls_iovec_t legacy_session_id;
       struct {
@@ -1074,7 +1107,9 @@ typedef struct st_ptls_log_event_t {
               size_t count;
           } identities;
           unsigned ke_modes;
-          int early_data_indication;
+          unsigned early_data_indication : 1;
+          unsigned is_last_extension : 1;
+          
       } psk;
       ptls_raw_extension_t unknown_extensions[MAX_UNKNOWN_EXTENSIONS + 1];
       unsigned status_request : 1;
@@ -1293,6 +1328,11 @@ typedef struct st_ptls_log_event_t {
    * encodes a quic varint (maximum length is PTLS_ENCODE_QUICINT_CAPACITY)
    */
   static uint8_t *ptls_encode_quicint(uint8_t *p, uint64_t v);
+
+#ifdef _WINDOWS
+/* suppress warning C4293: >> shift count negative or too big */
+#pragma warning(disable : 4293)
+#endif
 #define PTLS_ENCODE_QUICINT_CAPACITY 8
 
 #define ptls_buffer_pushv(buf, src, len)                                                                                           \
@@ -1641,14 +1681,28 @@ static void ptls_cipher_encrypt(ptls_cipher_context_t *ctx, void *output, const 
 ptls_aead_context_t *ptls_aead_new(ptls_aead_algorithm_t *aead, ptls_hash_algorithm_t *hash, int is_enc, const void *secret,
                                    const char *label_prefix);
 /**
+ * instantiates an AEAD cipher given key and iv
+ * @param aead
+ * @param is_enc 1 if creating a context for encryption, 0 if creating a context for decryption
+ * @return pointer to an AEAD context if successful, otherwise NULL
+ */
+ptls_aead_context_t *ptls_aead_new_direct(ptls_aead_algorithm_t *aead, int is_enc, const void *key, const void *iv);
+/**
  * destroys an AEAD cipher context
  */
 void ptls_aead_free(ptls_aead_context_t *ctx);
 /**
+ * Permutes the static IV by applying given bytes using bit-wise XOR. This API can be used for supplying nonces longer than 64-
+ * bits.
+ */
+static void ptls_aead_xor_iv(ptls_aead_context_t *ctx, const void *bytes, size_t len);
+/**
  *
  */
-size_t ptls_aead_encrypt(ptls_aead_context_t *ctx, void *output, const void *input, size_t inlen, uint64_t seq, const void *aad,
-                         size_t aadlen);
+static size_t ptls_aead_encrypt(ptls_aead_context_t *ctx, void *output, const void *input, size_t inlen, uint64_t seq,
+                                const void *aad, size_t aadlen);
+static void ptls_aead_encrypt_s(ptls_aead_context_t *ctx, void *output, const void *input, size_t inlen, uint64_t seq,
+                                const void *aad, size_t aadlen, ptls_aead_supplementary_encryption_t *supp);
 /**
  * initializes the internal state of the encryptor
  */
@@ -1714,7 +1768,12 @@ int ptls_server_handle_message(ptls_t *tls, ptls_buffer_t *sendbuf, size_t epoch
 /**
  * internal
  */
-void ptls_aead__build_iv(ptls_aead_context_t *ctx, uint8_t *iv, uint64_t seq);
+void ptls_aead__build_iv(ptls_aead_algorithm_t *algo, uint8_t *iv, const uint8_t *static_iv, uint64_t seq);
+/**
+ *
+ */
+static void ptls_aead__do_encrypt(ptls_aead_context_t *ctx, void *output, const void *input, size_t inlen, uint64_t seq,
+                                  const void *aad, size_t aadlen, ptls_aead_supplementary_encryption_t *supp);
 /**
  * internal
  */
@@ -1837,12 +1896,27 @@ inline void ptls_cipher_encrypt(ptls_cipher_context_t *ctx, void *output, const 
     ctx->do_transform(ctx, output, input, len);
 }
 
+inline void ptls_aead_xor_iv(ptls_aead_context_t *ctx, const void *bytes, size_t len)
+{
+    ctx->do_xor_iv(ctx, bytes, len);
+}
+
+inline size_t ptls_aead_encrypt(ptls_aead_context_t *ctx, void *output, const void *input, size_t inlen, uint64_t seq,
+                                const void *aad, size_t aadlen)
+{
+    ctx->do_encrypt(ctx, output, input, inlen, seq, aad, aadlen, NULL);
+    return inlen + ctx->algo->tag_size;
+}
+
+inline void ptls_aead_encrypt_s(ptls_aead_context_t *ctx, void *output, const void *input, size_t inlen, uint64_t seq,
+                                const void *aad, size_t aadlen, ptls_aead_supplementary_encryption_t *supp)
+{
+    ctx->do_encrypt(ctx, output, input, inlen, seq, aad, aadlen, supp);
+}
+
 inline void ptls_aead_encrypt_init(ptls_aead_context_t *ctx, uint64_t seq, const void *aad, size_t aadlen)
 {
-    uint8_t iv[PTLS_MAX_IV_SIZE];
-
-    ptls_aead__build_iv(ctx, iv, seq);
-    ctx->do_encrypt_init(ctx, iv, aad, aadlen);
+    ctx->do_encrypt_init(ctx, seq, aad, aadlen);
 }
 
 inline size_t ptls_aead_encrypt_update(ptls_aead_context_t *ctx, void *output, const void *input, size_t inlen)
@@ -1855,13 +1929,24 @@ inline size_t ptls_aead_encrypt_final(ptls_aead_context_t *ctx, void *output)
     return ctx->do_encrypt_final(ctx, output);
 }
 
+inline void ptls_aead__do_encrypt(ptls_aead_context_t *ctx, void *output, const void *input, size_t inlen, uint64_t seq,
+                                  const void *aad, size_t aadlen, ptls_aead_supplementary_encryption_t *supp)
+{
+    ctx->do_encrypt_init(ctx, seq, aad, aadlen);
+    ctx->do_encrypt_update(ctx, output, input, inlen);
+    ctx->do_encrypt_final(ctx, (uint8_t *)output + inlen);
+
+    if (supp != NULL) {
+        ptls_cipher_init(supp->ctx, supp->input);
+        memset(supp->output, 0, sizeof(supp->output));
+        ptls_cipher_encrypt(supp->ctx, supp->output, supp->output, sizeof(supp->output));
+    }
+}
+
 inline size_t ptls_aead_decrypt(ptls_aead_context_t *ctx, void *output, const void *input, size_t inlen, uint64_t seq,
                                 const void *aad, size_t aadlen)
 {
-    uint8_t iv[PTLS_MAX_IV_SIZE];
-
-    ptls_aead__build_iv(ctx, iv, seq);
-    return ctx->do_decrypt(ctx, output, input, inlen, iv, aad, aadlen);
+    return ctx->do_decrypt(ctx, output, input, inlen, seq, aad, aadlen);
 }
 
 #define ptls_define_hash(name, ctx_type, init_func, update_func, final_func)                                                       \
