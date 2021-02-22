@@ -3290,37 +3290,6 @@ static int decode_client_hello(ptls_t *tls, struct st_ptls_client_hello_t *ch,
         }
         src = end;
     });
-
-    /* check if client hello make sense */
-    if (is_supported_version(ch->selected_version)) {
-        if (!(ch->compression_methods.count == 1 && ch->compression_methods.ids[0] == 0)) {
-            ret = PTLS_ALERT_ILLEGAL_PARAMETER;
-            goto Exit;
-        }
-        /* esni */
-        if (ch->esni.cipher != NULL) {
-            if (ch->key_shares.base == NULL) {
-                ret = PTLS_ALERT_ILLEGAL_PARAMETER;
-                goto Exit;
-            }
-        }
-        /* pre-shared key */
-        if (ch->psk.hash_end != NULL) {
-            /* PSK must be the last extension */
-            if (exttype != PTLS_EXTENSION_TYPE_PRE_SHARED_KEY) {
-                ret = PTLS_ALERT_ILLEGAL_PARAMETER;
-                goto Exit;
-            }
-        } else {
-            if (ch->psk.early_data_indication) {
-                ret = PTLS_ALERT_ILLEGAL_PARAMETER;
-                goto Exit;
-            }
-        }
-    } else {
-        ret = PTLS_ALERT_PROTOCOL_VERSION;
-        goto Exit;
-    }
     if (did_we_received_mpjoin)
       ret = PTLS_ERROR_HANDSHAKE_IS_MPJOIN;
     else

@@ -238,7 +238,7 @@ static void test_generated(int aes256, int iv96)
 #ifdef _WINDOWS
     const int nb_runs = 1000;
 #else
-    const int nb_runs = 10000;
+    const int nb_runs = 100;
 #endif
     for (i = 0; i < nb_runs; ++i) {
         /* generate input using RNG */
