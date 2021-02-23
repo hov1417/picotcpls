@@ -9,14 +9,6 @@
 #define NBR_SUPPORTED_TCPLS_OPTIONS 5
 #define VARSIZE_OPTION_MAX_CHUNK_SIZE 4*16384 /* should be able to hold 4 records before needing to be extended */
 
-/*
- * When adding a new stream, we increase the low IV part by 4096 to avoid any
- * chance of collision. Note, when deriving server_write_iv and client_write_iv; we also
- * require to check whether the distance between them is at least
- * 4096*nbr_max_streams
- */
-#define MIN_LOWIV_STREAM_INCREASE 4096
-
 #define TCPLS_SIGNAL_SIZE 12
 #define STREAM_SENDER_NEW_STREAM_SIZE 4
 #define STREAM_CLOSE_SIZE 4

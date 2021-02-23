@@ -3104,12 +3104,38 @@ static int check_con_has_connected(tcpls_t *tcpls, connect_info_t *con, int *res
  * If is_ours, we increment from the original value
  * else we decrement from the original  value
  *
+ * offset: the number off needed increments or decrements
  **/
 
+
 static void stream_derive_new_aead_iv(ptls_t *tls, uint8_t *iv, int iv_size, int is_ours) {
-
-  
-
+  tcpls_t *tcpls = tls->tcpls;
+  /** TODO for parallel stream attachment, the offset should be given in the
+   * STREAM_ATTACH message */
+  uint32_t offset = is_ours ? tcpls->next_stream_id : tcpls->nbr_of_peer_streams_attached;
+  if (iv_size == 96) {
+    /* Take the 25 LSB out of the 32 MSB IV, clear the top 7 bits */
+    uint32_t msb_iv = * (uint32_t *) iv;
+    for (int i = 32; i > 25; i--) {
+      msb_iv &= ~(1 << i);
+    }
+    if (is_ours) 
+      msb_iv = (msb_iv + offset) % 0x2000000;
+    else
+      msb_iv = (msb_iv - offset) % 0x2000000;
+    uint32_t msb_iv_2 = *(uint32_t *) iv;
+    for (int i = 32; i > 25; i--) {
+      msb_iv_2 &= ~(1 << i);
+      msb_iv_2 |= (msb_iv << i);
+    }
+    memcpy(iv, &msb_iv_2, sizeof(uint32_t));
+  }
+  else if (iv_size == 128) {
+    fprintf(stderr, "IV derivation with 128 bits IVs: Not implemented yet");
+  }
+  else {
+    fprintf(stderr, "IV derivation: Not implemented yet");
+  }
 }
 
 /**
@@ -3122,8 +3148,6 @@ static void stream_derive_new_aead_iv(ptls_t *tls, uint8_t *iv, int iv_size, int
  * Note: less keys => better security
  *
  */
-
-// TODO FIXBUG IV derivation
 static int new_stream_derive_aead_context(ptls_t *tls, tcpls_stream_t *stream, int is_ours) {
 
   struct st_ptls_traffic_protection_t *ctx_enc = &tls->traffic_protection.enc;
@@ -3161,7 +3185,7 @@ static int new_stream_derive_aead_context(ptls_t *tls, tcpls_stream_t *stream, i
           tls->ctx->hkdf_label_prefix__obsolete)) != 0)
       return -1;
   /** Derive dec iv */
-  //XXX TODO
+  stream_derive_new_aead_iv(tls, iv, tls->cipher_suite->aead->iv_size, is_ours);
   stream->aead_dec = ptls_aead_new_direct(tls->cipher_suite->aead,
     0, key, iv);
   if (stream->aead_dec)
