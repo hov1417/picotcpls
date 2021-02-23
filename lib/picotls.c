@@ -925,8 +925,8 @@ Exit:
 static int get_traffic_key(ptls_hash_algorithm_t *algo, void *key, size_t key_size, int is_iv, const void *secret,
                            ptls_iovec_t hash_value, const char *label_prefix)
 {
-    return ptls_hkdf_expand_label(algo, key, key_size, ptls_iovec_init(secret, algo->digest_size), is_iv ? "iv" : "key", hash_value,
-                                  label_prefix);
+    return ptls_hkdf_expand_label(algo, key, key_size, ptls_iovec_init(secret,
+          algo->digest_size), is_iv ? "iv" : "key", hash_value, label_prefix);
 }
 
 static int setup_traffic_protection(ptls_t *tls, int is_enc, const char

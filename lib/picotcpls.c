@@ -3098,57 +3098,19 @@ static int check_con_has_connected(tcpls_t *tcpls, connect_info_t *con, int *res
 /**
  * Compute the value IV to use for the next stream.
  *
- * It allows the counter to start at 0 using the same key for all streams, and
- * MIN_LOWIV_STREAM_INCREASE prevent the AES counter to have a chance to overlap
- * between calls.
+ * It allows the counter to start at 0 using the same key for all streams.
+ * Prevent different streams to overlap their GCM counter
+ * 
+ * If is_ours, we increment from the original value
+ * else we decrement from the original  value
  *
- * TODO debug
  **/
 
-/*static void stream_derive_new_aead_iv(ptls_t *tls, uint8_t *iv, int iv_size,*/
-    /*streamid_t streamid, int is_ours) {*/
-  /*return;*/
-  /*int mult;*/
-  /*[>* server next_stream_id starts at 2**31 <]*/
-  /*if (tls->is_server && is_ours) {*/
-    /*mult = streamid-2147483648-1;*/
-  /*}*/
-  /*else {*/
-    /*mult = streamid-1;*/
-  /*}*/
-  /*[>* TLS 1.3 supports ciphers with two different IV size so far <]*/
-  /*if (iv_size == 12) {*/
-    /*uint32_t low_iv = (uint32_t) iv[8];*/
-    /*[>* if over uin32 MAX; it should properly wrap arround <]*/
-    /*printf("low iv: %u; mult: %d\n", low_iv, mult);*/
-    /*low_iv += mult * MIN_LOWIV_STREAM_INCREASE;*/
-    /*printf("low iv: %u; mult: %d\n", low_iv, mult);*/
-    /*[>if (tls->is_server) {<]*/
-    /*[>[>set the leftmost bit to 1<]<]*/
-    /*[>low_iv |= (1 << 31);<]*/
-    /*[>}<]*/
-    /*[>else {<]*/
-    /* client initiated streams would have the left most bit of the low_iv
-     * part always to 0 */
-    /*[>low_iv |= (0 << 31);<]*/
-    /*[>}<]*/
-    /*memcpy(&iv[8], &low_iv, 4);*/
-  /*}*/
-  /*[>* 16 bytes IV <]*/
-  /*else if (iv_size == 16) {*/
-    /*uint64_t low_iv = (uint64_t) iv[8];*/
-    /*low_iv += mult * MIN_LOWIV_STREAM_INCREASE;*/
-    /*if (tls->is_server)*/
-      /*low_iv |= (1UL << 63);*/
-    /*else*/
-      /*low_iv |= (0UL << 63);*/
-    /*memcpy(&iv[8], &low_iv, 8);*/
-  /*}*/
-  /*else {*/
-    /*[>* TODO; change the return type; and return -1 here <]*/
-    /*printf("THAT MUST NOT HAPPEN :) \n");*/
-  /*}*/
-/*}*/
+static void stream_derive_new_aead_iv(ptls_t *tls, uint8_t *iv, int iv_size, int is_ours) {
+
+  
+
+}
 
 /**
  * Derive new aead context for the new stream; i.e., currently use a tweak on
@@ -3166,21 +3128,44 @@ static int new_stream_derive_aead_context(ptls_t *tls, tcpls_stream_t *stream, i
 
   struct st_ptls_traffic_protection_t *ctx_enc = &tls->traffic_protection.enc;
   struct st_ptls_traffic_protection_t *ctx_dec = &tls->traffic_protection.dec;
-  stream->aead_enc = ptls_aead_new(tls->cipher_suite->aead,
-      tls->cipher_suite->hash, 1, ctx_enc->secret,
-      tls->ctx->hkdf_label_prefix__obsolete);
+  uint8_t key[PTLS_MAX_SECRET_SIZE];
+  uint8_t iv[PTLS_MAX_IV_SIZE];
+  int ret;
+
+  if ((ret = ptls_hkdf_expand_label(tls->cipher_suite->hash, key,
+          tls->cipher_suite->aead->key_size, ptls_iovec_init(ctx_enc->secret,
+            tls->cipher_suite->hash->digest_size), "key", ptls_iovec_init(NULL, 0),
+          tls->ctx->hkdf_label_prefix__obsolete)) != 0)
+      return -1;
+  if ((ret = ptls_hkdf_expand_label(tls->cipher_suite->hash, iv,
+          tls->cipher_suite->aead->iv_size, ptls_iovec_init(ctx_enc->secret,
+            tls->cipher_suite->hash->digest_size), "iv", ptls_iovec_init(NULL, 0),
+          tls->ctx->hkdf_label_prefix__obsolete)) != 0)
+      return -1;
+  /** Derive enc iv */
+  stream_derive_new_aead_iv(tls, iv, tls->cipher_suite->aead->iv_size, is_ours);
+
+  stream->aead_enc = ptls_aead_new_direct(tls->cipher_suite->aead,
+      1, key, iv);
   if (!stream->aead_enc)
     return PTLS_ERROR_NO_MEMORY;
-  /** now change the lower half bits of the IV to avoid collisions */
-  /*stream_derive_new_aead_iv(tls, stream->aead_enc->static_iv,*/
-      /*tls->cipher_suite->aead->iv_size, stream->streamid, is_ours);*/
-  stream->aead_dec = ptls_aead_new(tls->cipher_suite->aead,
-      tls->cipher_suite->hash, 0, ctx_dec->secret,
-      tls->ctx->hkdf_label_prefix__obsolete);
+
+  if ((ret = ptls_hkdf_expand_label(tls->cipher_suite->hash, key,
+          tls->cipher_suite->aead->key_size, ptls_iovec_init(ctx_dec->secret,
+            tls->cipher_suite->hash->digest_size), "key", ptls_iovec_init(NULL, 0),
+          tls->ctx->hkdf_label_prefix__obsolete)) != 0)
+      return -1;
+  if ((ret = ptls_hkdf_expand_label(tls->cipher_suite->hash, iv,
+          tls->cipher_suite->aead->iv_size, ptls_iovec_init(ctx_dec->secret,
+            tls->cipher_suite->hash->digest_size), "iv", ptls_iovec_init(NULL, 0),
+          tls->ctx->hkdf_label_prefix__obsolete)) != 0)
+      return -1;
+  /** Derive dec iv */
+  //XXX TODO
+  stream->aead_dec = ptls_aead_new_direct(tls->cipher_suite->aead,
+    0, key, iv);
   if (stream->aead_dec)
     return PTLS_ERROR_NO_MEMORY;
-  /*stream_derive_new_aead_iv(tls, stream->aead_dec->static_iv,*/
-      /*tls->cipher_suite->aead->iv_size, stream->streamid, is_ours);*/
   return 0;
 }
 
