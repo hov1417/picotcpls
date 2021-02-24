@@ -194,6 +194,9 @@ typedef struct st_tcpls_stream {
    *We use this information within a FAILOVER message to tell the peer which number is expected to
    *decrypt correctly */
 
+  /** offset assigned to this stream for the iv derivation */
+  uint32_t offset;
+
   unsigned int failover_end_sent : 1;
   unsigned int failover_end_received : 1;
   uint32_t last_seq_poped;
@@ -293,6 +296,8 @@ struct st_tcpls_t {
   uint32_t next_transport_id;
   /** count the number of times we attached a stream from the peer*/
   uint32_t nbr_of_peer_streams_attached;
+  /** count the number of streams attached */
+  uint32_t nbr_of_our_streams_attached;
   /** nbr of tcp connection */
   uint32_t nbr_tcp_streams;
   /** socket of the primary address - must be update at each primary change*/
