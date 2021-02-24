@@ -52,10 +52,8 @@ The goal of TCPLS is threefold:
 * Showing the quest for maximum Web performance with QUIC can be matched by
   TCPLS, or even improved under several metrics.
 
-/!\ There are probably bugs left, and the API may evolve over time. Use
+/!\ There are probably many bugs left, and the API may evolve over time. Use
 it for fun and experiments /!\
-
-/!\ The current implementation is cryptographically unsecure (IV derivation bug remains to be fixed; not a priortiy tho) /!\
 
 Like picotls, the implementation of picotcpls is licensed under the MIT license.
 
@@ -138,9 +136,9 @@ int settopeer, int is_ours)`.
 `is_primary` sets this address as the default. `settopeer` tells TCPLS
 to announce this address to the peer. If this connection is a
 server-side connection, and if this function is called before the
-hanshake, then TCPLS will send this address as part of a new
+handshake, then TCPLS will send this address as part of a new
 EncryptedExtension. The client application is advertised of the new
-address through an connection event mechanism that we will discuss below.  
+address through a connection event mechanism that we will discuss below.  
 
 If this function called before the handshake and the connection is
 client-side, then the information will be sent as part of the first data
@@ -149,7 +147,7 @@ making more entropy for fingerprinting, avoiding the client-side handshake to lo
 different depending on the number of encrypted addresses advertized.  
 
 If these functions are called after the handshake, then the application
-can either call `tcpls_send_transport_opt` to send addresses right away or
+can either call `tcpls_send_tcpoption` to send addresses right away or
 wait the next exchange of application-level data, in which new addresses
 will be also included.
 
@@ -284,15 +282,29 @@ message on it anyway.
 #### Multipath
 
 Multipath can be seamlessly enabled by opening streams on different destinations
-of the same TCPLS connection. Sending over the different streams would
+of the same TCPLS connection. There is two multipath mode. One that
+gives a global ordering for all stream data, such that you can schedule
+your application data in any stream.
+
+To enable it, both the client and the server have to set it on the tcpls
+object:
+
+`tcpls->enable_multipath=1`
+
+Sending over the different streams would
 make the TCPLS aggregates the bandwith of the different TCP connection,
 assuming the internal reordering buffer does not reach its size limit
-(currently unspecified).
+(currently unspecified).  
+
+If `tcpls->enable_multipath=0` is configured on both peer, the you must
+take care of sending a application-level object within the same stream,
+since ordering is only guaranteed per-stream. This is more efficient is
+some context, but require a bit more work at the application layer.
 
 The current implementation logic is to make the sender multipath aware,
-and the receiver passive. That is, the only control the receiver has on
+and the receiver agnostic. That is, the only control the receiver has on
 the multipath notion is from the scheduler used when calling
-`tcpls_receive`. This scheduler can be set by the receiver TODO
+`tcpls_receive`. This scheduler can be set by the receiver TODO.
 
 
 ### Sending / receiving data
@@ -309,8 +321,7 @@ returns the number of bytes sent (counting the TLS overhead).
 
 #### Receiving data
 
-`int tcpls_receive(ptls_t *tls, ptls_buffer_t *decryptbuf, size_t
-nbytes, struct timeval *tv)`
+`int tcpls_receive(ptls_t *tls, ptls_buffer_t *decryptbuf, struct timeval *tv)`
 
 returns either TCPLS_HOLD_DATA_TO_READ,
 TCPLS_HOLD_OUT_OF_ORDER_DATA_TO_READ, TCPLS_OK or -1
@@ -320,10 +331,9 @@ available. TCPLS_HOLD_OUT_OF_ORDER_DATA_TO_READ means that TCPLS hold
 some out of order data that we expect eventually be available to read.
 TCPLS_OK means that we have nothing more left.  
 
-All read data (at most nbytes at each call) is put within decryptbuf.
-The current number of bytes within the buffer can be reach with
-`decryptbuf->off`, and the pointer to the first byte is at
-`decryptbuf->base`.
+All available data is put within decryptbuf.  The current number of
+bytes within the buffer can be reach with `decryptbuf->off`, and the
+pointer to the first byte is at `decryptbuf->base`.
 
 `tv` is a timeout which tells tcpls_receive how much time it must wait
 at most for a read() sys call. Setting NULL tells tcpls not to wait.

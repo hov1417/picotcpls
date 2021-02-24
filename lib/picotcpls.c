@@ -1305,18 +1305,6 @@ int tcpls_receive(ptls_t *tls, ptls_buffer_t *decryptbuf, struct timeval *tv) {
   for (int i =  0; i < tcpls->connect_infos->size; i++) {
     con = list_get(tcpls->connect_infos, i);
     if (FD_ISSET(con->socket, &rset) && con->state >= CONNECTED) {
-      /*struct tcp_repair_window trw;*/
-      /*int rcv_size;*/
-      /*socklen_t rcv_size_len = sizeof(rcv_size);*/
-      /*getsockopt(con->socket, SOL_SOCKET, SO_RCVBUF, (void*)&rcv_size, &rcv_size_len);*/
-      /*socklen_t trwlen = sizeof(trw);*/
-      /*getsockopt(con->socket, IPPROTO_TCP, TCP_REPAIR_WINDOW, &trw, &trwlen);*/
-      /*int bufsize = rcv_size;*/
-      /*int full_records = bufsize/(PTLS_MAX_ENCRYPTED_RECORD_SIZE);*/
-      /*if (full_records > 1)*/
-        /*bufsize = full_records*PTLS_MAX_ENCRYPTED_RECORD_SIZE;*/
-      /*else*/
-        /*bufsize = PTLS_MAX_ENCRYPTED_RECORD_SIZE;*/
       ret = recv(con->socket, tcpls->recvbuf, tcpls->recvbuflen, 0);
       if (ret <= 0) {
         if ((errno == ECONNRESET || errno == EPIPE || errno == ETIMEDOUT) && tcpls->enable_failover) {
@@ -1387,7 +1375,8 @@ int tcpls_receive(ptls_t *tls, ptls_buffer_t *decryptbuf, struct timeval *tv) {
 }
 
 /**
- * Sends a tcp option which has previously been registered with ptls_set...
+ * Sends a tcp option which has previously been registered with ptls_set...,
+ * or alternative addresses registered with tcpls_add_v4/v6
  *
  * This function should be called after the handshake is complete for both party
  * */
