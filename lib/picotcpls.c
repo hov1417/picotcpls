@@ -2494,7 +2494,7 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
 int handle_tcpls_data_record(ptls_t *tls, struct st_ptls_record_t *rec)
 {
   tcpls_t *tcpls = tls->tcpls;
-  uint32_t mpseq;
+  uint32_t mpseq = 0;
   if (tcpls->enable_multipath) {
     mpseq = *(uint32_t *) &rec->fragment[rec->length-sizeof(mpseq)];
     rec->length -= sizeof(mpseq);
