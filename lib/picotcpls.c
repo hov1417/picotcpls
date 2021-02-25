@@ -65,6 +65,7 @@
 #include "containers.h"
 #include "picotls.h"
 #include "picotcpls.h"
+#include "rsched.h"
 /* Forward declarations */
 static int tcpls_init_context(ptls_t *ptls, const void *data, size_t datalen,
   tcpls_enum_t type, uint8_t setlocal, uint8_t settopeer);
@@ -158,6 +159,7 @@ void *tcpls_new(void *ctx, int is_server) {
   tcpls->tcpls_options = new_list(sizeof(tcpls_options_t), NBR_SUPPORTED_TCPLS_OPTIONS);
   tcpls->streams = new_list(sizeof(tcpls_stream_t), 3);
   tcpls->connect_infos = new_list(sizeof(connect_info_t), 2);
+  tcpls->schedule_receive = &round_robin_con_scheduler;
   tls->tcpls = tcpls;
   return tcpls;
 }
@@ -1275,15 +1277,77 @@ int tcpls_send(ptls_t *tls, streamid_t streamid, const void *input, size_t nbyte
   }
 }
 
+
+int tcpls_internal_data_process(tcpls_t *tcpls, connect_info_t *con,  int recvret, ptls_buffer_t *decryptbuf) {
+  ptls_t *tls = tcpls->tls;
+  if (recvret <= 0) {
+    if ((errno == ECONNRESET || errno == EPIPE || errno == ETIMEDOUT) && tcpls->enable_failover) {
+      //XXX check whether we have to close the con
+      if (initiate_recovering(tcpls, con) < 0) {
+        fprintf(stderr, "Failed to recover the connection. Something wrong happened\n");
+        return -1;
+      }
+    }
+    else {
+      //XXX
+      connection_close(tcpls, con);
+    }
+    return TCPLS_OK;
+  }
+  else {
+    /* We have stuff to decrypt */
+    tcpls->transportid_rcv = con->this_transportid;
+    int count_streams = count_streams_from_transportid(tcpls,  con->this_transportid);
+    /** The first message over the fist connection, server-side, we do not
+     * have streams attach yet, it is coming! */
+    int rret = 1;
+    size_t input_off = 0;
+    size_t input_size = recvret;
+    size_t consumed;
+    if (count_streams == 0) {
+      tcpls->streamid_rcv = 0; /** no stream */
+      ptls_aead_context_t *remember_aead = tcpls->tls->traffic_protection.dec.aead;
+      do {
+        consumed = input_size - input_off;
+        rret = ptls_receive(tls, decryptbuf, tcpls->buffrag, tcpls->recvbuf + input_off, &consumed);
+        input_off += consumed;
+      } while (rret == 0 && input_off < input_size);
+      /** We may have received a stream attach that changed the aead*/
+      tcpls->tls->traffic_protection.dec.aead = remember_aead;
+    }
+    if (input_off < input_size) {
+      int progress = 1;
+      while (progress && rret) {
+        if ((rret = try_decrypt_with_multistreams(tcpls, tcpls->recvbuf, decryptbuf, &input_off, input_size)) != 0) {
+          progress = input_off;
+          rret = try_decrypt_with_multistreams(tcpls, tcpls->recvbuf, decryptbuf, &input_off, input_size);
+          /* We tried once again all streams but we did not make any input
+           * progress; we escape the loop and log an error if rret != 0*/
+          if (progress == input_off)
+            progress = 0;
+        }
+      }
+    }
+    if (rret != 0) {
+      fprintf(stderr, "We got a major error %d\n", rret);
+      return rret;
+    }
+    /* merge rec_reording with decryptbuf if we can */
+    multipath_merge_buffers(tcpls, decryptbuf);
+    return TCPLS_OK;
+  }
+}
+
+
 /**
-* Wait at most tv time over all stream sockets to be available for reading
-*
-* // TODO adding configurable callbacks for TCPLS events
-*/
+ * Wait at most tv time over all stream sockets to be available for reading
+ *
+ * // TODO adding configurable callbacks for TCPLS events
+ */
 
 int tcpls_receive(ptls_t *tls, ptls_buffer_t *decryptbuf, struct timeval *tv) {
   fd_set rset;
-  int ret, selectret;
+  int selectret;
   tcpls_t *tcpls = tls->tcpls;
   FD_ZERO(&rset);
   connect_info_t *con;
@@ -1300,69 +1364,8 @@ int tcpls_receive(ptls_t *tls, ptls_buffer_t *decryptbuf, struct timeval *tv) {
   if (selectret <= 0) {
     return -1;
   }
-  ret = 0;
-  /* Default strategy -- One max record pulled for each connection */
-  for (int i =  0; i < tcpls->connect_infos->size; i++) {
-    con = list_get(tcpls->connect_infos, i);
-    if (FD_ISSET(con->socket, &rset) && con->state >= CONNECTED) {
-      ret = recv(con->socket, tcpls->recvbuf, tcpls->recvbuflen, 0);
-      if (ret <= 0) {
-        if ((errno == ECONNRESET || errno == EPIPE || errno == ETIMEDOUT) && tcpls->enable_failover) {
-          //XXX check whether we have to close the con
-          if (initiate_recovering(tcpls, con) < 0) {
-            fprintf(stderr, "Failed to recover the connection. Something wrong happened\n");
-            return -1;
-          }
-        }
-        else {
-        //XXX
-          connection_close(tcpls, con);
-          return TCPLS_OK;
-        }
-      }
-      else {
-        /* We have stuff to decrypt */
-        tcpls->transportid_rcv = con->this_transportid;
-        int count_streams = count_streams_from_transportid(tcpls,  con->this_transportid);
-        /** The first message over the fist connection, server-side, we do not
-         * have streams attach yet, it is coming! */
-        int rret = 1;
-        size_t input_off = 0;
-        size_t input_size = ret;
-        size_t consumed;
-        if (count_streams == 0) {
-          tcpls->streamid_rcv = 0; /** no stream */
-          ptls_aead_context_t *remember_aead = tcpls->tls->traffic_protection.dec.aead;
-          do {
-            consumed = input_size - input_off;
-            rret = ptls_receive(tls, decryptbuf, tcpls->buffrag, tcpls->recvbuf + input_off, &consumed);
-            input_off += consumed;
-          } while (rret == 0 && input_off < input_size);
-          /** We may have received a stream attach that changed the aead*/
-          tcpls->tls->traffic_protection.dec.aead = remember_aead;
-        }
-        if (input_off < input_size) {
-          int progress = 1;
-          while (progress && rret) {
-            if ((rret = try_decrypt_with_multistreams(tcpls, tcpls->recvbuf, decryptbuf, &input_off, input_size)) != 0) {
-              progress = input_off;
-              rret = try_decrypt_with_multistreams(tcpls, tcpls->recvbuf, decryptbuf, &input_off, input_size);
-              /* We tried once again all streams but we did not make any input
-               * progress; we escape the loop and log an error if rret != 0*/
-              if (progress == input_off)
-                progress = 0;
-            }
-          }
-        }
-        if (rret != 0) {
-          fprintf(stderr, "We got a major error %d\n", rret);
-          return rret;
-        }
-        /* merge rec_reording with decryptbuf if we can */
-        multipath_merge_buffers(tcpls, decryptbuf);
-      }
-    }
-  }
+  if (tcpls->schedule_receive(tcpls, &rset, decryptbuf, NULL) < 0)
+    return -1;
   /** flush an ack if needed */
   if (send_ack_if_needed(tcpls, NULL))
     return -1;
@@ -1401,9 +1404,9 @@ int tcpls_send_tcpoption(tcpls_t *tcpls, int transportid, tcpls_enum_t type, int
   tcpls_stream_t *stream;
   found = 0;
   for (int i = 0; i < tcpls->streams->size && !found; i++) {
-     stream = list_get(tcpls->streams, i);
-     if (stream->transportid == transportid && stream->stream_usable)
-       found = 1;
+    stream = list_get(tcpls->streams, i);
+    if (stream->transportid == transportid && stream->stream_usable)
+      found = 1;
   }
   //Use default sendbuf;
   ptls_buffer_t *buf;

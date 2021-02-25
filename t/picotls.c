@@ -38,6 +38,7 @@
 #include "../lib/heap.c"
 #include "../lib/picotls.c"
 #include "../lib/picotcpls.c"
+#include "../lib/rsched.c"
 #include "test.h"
 
 static void test_is_ipaddr(void)

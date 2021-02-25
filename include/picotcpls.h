@@ -309,6 +309,13 @@ struct st_tcpls_t {
   streamid_t streamid_rcv;
   /** the very initial socket used for the handshake */
   int initial_socket;
+
+  /**
+   * Scheduler callback for the receiver. Can be set by the application to
+   * instrument how multiple connections should pull bytes.
+   */
+  int (*schedule_receive)(tcpls_t *tcpls, fd_set *rset, ptls_buffer_t *decryptbuf, void *data);
+
   /**
    * Set to 1 if the other peer also announced it supports Encrypted TCP
    * options
@@ -371,6 +378,8 @@ void tcpls_free(tcpls_t *tcpls);
 
 /*============================================================================*/
 /** Internal to picotls */
+
+int tcpls_internal_data_process(tcpls_t *tcpls, connect_info_t *con, int recvret, ptls_buffer_t *decryptbuf);
 
 int get_tcpls_header_size(tcpls_t *tcpls, uint8_t type, tcpls_enum_t message);
 
