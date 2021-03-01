@@ -370,7 +370,51 @@ A few more tests with IPMininet
 ---
 
 [IPMininet](https://ipmininet.readthedocs.io/en/latest/install.html) is a wrapper extension to Mininet to support further complex
-networks. After installing it, you may use a testing network
+networks. After installing it, you may use the testing network from
+t/ipmininet/test_network_2paths.py.
+
+```
+% cd t/ipmininet && sudo python test_network_2paths.py
+```
+
+It boots a network composed of a two hosts connected through two
+disjoint IPv4 and IPv6 paths. From the Mininet CLI interface, get two
+terminals typing
+
+```
+xterm c s
+```
+
+It gives you two xterm terminals, one for the client c, one for the
+server s. You may now run different tests:
+
+On serveur:
+
+./run_test_server_simple_transfer.sh enable_failover
+
+On client:
+
+./run_test_client_simple_transfer.sh enable_failover
+
+would simply transfer a 60MiB file between the hosts on the fastest
+path. enable_failover is a 0/1 value to let you play with the feature
+(e.g., try to send a TCP RST from one of the routers).
+
+Other tests are available:
+
+./run_test_[server/client]_multipath.sh runs two application-level
+connect migration during the transfer.  
+
+./run_test_[server/client]_aggregation.sh starts the connection on one
+stream, then join after a few MB of transfer with another stream
+attached to the other IP path to aggregate the bandwidth.
+
+./run_test_[server/client]_zerortt.sh a simple TCPLS handshake with
+0-RTT TCP. It gives a 1-RTT initial connection establishment like QUIC.
+(you may need to use sysctl turn on TFO on your system).  
+
+Note that further connection establishments can also be 0-RTT like QUIC, at the
+price of no forward secrecy. We just miss a test for that scenario :-)
 
 License
 ---
