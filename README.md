@@ -358,27 +358,19 @@ Using the cli command
 
 Run the test server (at 127.0.0.1:8443):
 ```
-% ./cli -c /path/to/certificate.pem -k /path/to/private-key.pem  127.0.0.1 8443
+% ./cli -t -T perf /path/to/certificate.pem -k /path/to/private-key.pem  127.0.0.1 8443
 ```
 
 Connect to the mtest server:
 ```
-% ./cli 127.0.0.1 8443
+% ./cli -t -T perf 127.0.0.1 8443
 ```
 
-Using resumption:
-```
-% ./cli -s session-file 127.0.0.1 8443
-```
-The session-file is read-write.
-The cli server implements a single-entry session cache.
-The cli server sends NewSessionTicket when it first sends application data after receiving ClientFinished.
+A few more tests with IPMininet
+---
 
-Using early-data:
-```
-% ./cli -s session-file -e 127.0.0.1 8443
-```
-When `-e` option is used, client first waits for user input, and then sends CLIENT_HELLO along with the early-data.
+[IPMininet](https://ipmininet.readthedocs.io/en/latest/install.html) is a wrapper extension to Mininet to support further complex
+networks. After installing it, you may use a testing network
 
 License
 ---

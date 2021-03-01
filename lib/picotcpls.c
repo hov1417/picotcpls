@@ -164,6 +164,10 @@ void *tcpls_new(void *ctx, int is_server) {
   return tcpls;
 }
 
+/**
+ * Add our current registered v4 addresses to the options, which might be sent by
+ * the application to the other peer
+ */
 
 int static add_v4_to_options(tcpls_t *tcpls, uint8_t n) {
   /** Contains the number of IPs in [0], and then the 32 bits of IPs */
@@ -183,6 +187,11 @@ int static add_v4_to_options(tcpls_t *tcpls, uint8_t n) {
   addresses[0] = n;
   return tcpls_init_context(tcpls->tls, addresses, n*sizeof(struct in_addr)+1, MULTIHOMING_v4, 0, 1);
 }
+
+/**
+ * Add our current registered v6 addresses to the options, which might be sent by
+ * the application to the other peer
+ */
 
 int static add_v6_to_options(tcpls_t *tcpls, uint8_t n) {
   uint8_t *addresses = malloc(n*sizeof(struct in6_addr)+1);
@@ -1115,7 +1124,10 @@ int tcpls_streams_attach(ptls_t *tls, streamid_t streamid, int sendnow) {
   return ret;
 }
 
-
+/**
+ * Helper for sending a stream_close or stream_close_ack message to the other
+ * peer through a stream
+ */
 static int stream_close_helper(tcpls_t *tcpls, tcpls_stream_t *stream, int type, int sendnow) {
   uint8_t input[4];
   /** send the stream id to the peer */
@@ -1277,7 +1289,12 @@ int tcpls_send(ptls_t *tls, streamid_t streamid, const void *input, size_t nbyte
   }
 }
 
-
+/**
+ * Used by a receiver scheduler to process read data.
+ *
+ * con is the connection on which the data has been read, recvret is the return
+ * value from the recv/read call.
+ */
 int tcpls_internal_data_process(tcpls_t *tcpls, connect_info_t *con,  int recvret, ptls_buffer_t *decryptbuf) {
   ptls_t *tls = tcpls->tls;
   if (recvret <= 0) {
@@ -1364,6 +1381,7 @@ int tcpls_receive(ptls_t *tls, ptls_buffer_t *decryptbuf, struct timeval *tv) {
   if (selectret <= 0) {
     return -1;
   }
+  /* Call a scheduler from rsched.c */
   if (tcpls->schedule_receive(tcpls, &rset, decryptbuf, NULL) < 0)
     return -1;
   /** flush an ack if needed */
@@ -1516,6 +1534,9 @@ int ptls_set_bpf_cc(ptls_t *ptls, const uint8_t *bpf_prog_bytecode, size_t bytec
 
 /*===================================Internal========================================*/
 
+/**
+ * Compare two uint32_t for ordering
+ */
 static int cmp_uint32(void *mpseq1, void *mpseq2) {
 
   register uint32_t key1_v = *((uint32_t*)mpseq1);
@@ -1528,6 +1549,13 @@ static int cmp_uint32(void *mpseq1, void *mpseq2) {
     return 0;
   else return 1;
 }
+
+/**
+ * Try decrypting some data received over some connection. Multiple streams
+ * might have been attached to the connection, and we need to find which one
+ * the received data belongs to.
+ *
+ */
 
 static int try_decrypt_with_multistreams(tcpls_t *tcpls, const void *input,
     ptls_buffer_t *decryptbuf, size_t *input_off, size_t input_size) {
