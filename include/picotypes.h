@@ -15,4 +15,5 @@ typedef struct st_ptls_aead_context_t ptls_aead_context_t;
 typedef struct st_tcpls_record_fifo_t tcpls_record_fifo_t;
 typedef struct st_list_t list_t;
 typedef struct st_ptls_handshake_properties_t ptls_handshake_properties_t;
+typedef struct st_tcpls_buffer tcpls_buffer_t;
 #endif

@@ -111,7 +111,7 @@ static connect_info_t *try_reconnect(tcpls_t *tcpls, connect_info_t *con, int *r
 static int send_unacked_data(tcpls_t *tcpls, tcpls_stream_t *stream, connect_info_t *tocon);
 static int do_send(tcpls_t *tcpls, tcpls_stream_t *stream, connect_info_t *con);
 static int initiate_recovering(tcpls_t *tcpls, connect_info_t *con);
-static int try_decrypt_with_multistreams(tcpls_t *tcpls, const void *input, ptls_buffer_t *decryptbuf,  size_t *input_off, size_t input_size);
+static int try_decrypt_with_multistreams(tcpls_t *tcpls, const void *input, tcpls_buffer_t *decryptbuf,  size_t *input_off, size_t input_size);
 
 /**
 * Create a new TCPLS object
@@ -1295,7 +1295,7 @@ int tcpls_send(ptls_t *tls, streamid_t streamid, const void *input, size_t nbyte
  * con is the connection on which the data has been read, recvret is the return
  * value from the recv/read call.
  */
-int tcpls_internal_data_process(tcpls_t *tcpls, connect_info_t *con,  int recvret, ptls_buffer_t *decryptbuf) {
+int tcpls_internal_data_process(tcpls_t *tcpls, connect_info_t *con,  int recvret, tcpls_buffer_t *buf) {
   ptls_t *tls = tcpls->tls;
   if (recvret <= 0) {
     if ((errno == ECONNRESET || errno == EPIPE || errno == ETIMEDOUT) && tcpls->enable_failover) {
@@ -1322,11 +1322,15 @@ int tcpls_internal_data_process(tcpls_t *tcpls, connect_info_t *con,  int recvre
     size_t input_size = recvret;
     size_t consumed;
     if (count_streams == 0) {
-      tcpls->streamid_rcv = 0; /** no stream */
+      tcpls->streamid_rcv = 0; /** no stream; we should get a STREAM_ATTACH first! */
+      /** we should only be able to decrypt the STREAM_ATTACH, then would need
+       * to change the context anyway */
+      ptls_buffer_t decryptbuf;
+      ptls_buffer_init(&decryptbuf, "", 0);
       ptls_aead_context_t *remember_aead = tcpls->tls->traffic_protection.dec.aead;
       do {
         consumed = input_size - input_off;
-        rret = ptls_receive(tls, decryptbuf, tcpls->buffrag, tcpls->recvbuf + input_off, &consumed);
+        rret = ptls_receive(tls, &decryptbuf, tcpls->buffrag, tcpls->recvbuf + input_off, &consumed);
         input_off += consumed;
       } while (rret == 0 && input_off < input_size);
       /** We may have received a stream attach that changed the aead*/
@@ -1335,9 +1339,9 @@ int tcpls_internal_data_process(tcpls_t *tcpls, connect_info_t *con,  int recvre
     if (input_off < input_size) {
       int progress = 1;
       while (progress && rret) {
-        if ((rret = try_decrypt_with_multistreams(tcpls, tcpls->recvbuf, decryptbuf, &input_off, input_size)) != 0) {
+        if ((rret = try_decrypt_with_multistreams(tcpls, tcpls->recvbuf, buf, &input_off, input_size)) != 0) {
           progress = input_off;
-          rret = try_decrypt_with_multistreams(tcpls, tcpls->recvbuf, decryptbuf, &input_off, input_size);
+          rret = try_decrypt_with_multistreams(tcpls, tcpls->recvbuf, buf, &input_off, input_size);
           /* We tried once again all streams but we did not make any input
            * progress; we escape the loop and log an error if rret != 0*/
           if (progress == input_off)
@@ -1350,7 +1354,9 @@ int tcpls_internal_data_process(tcpls_t *tcpls, connect_info_t *con,  int recvre
       return rret;
     }
     /* merge rec_reording with decryptbuf if we can */
-    multipath_merge_buffers(tcpls, decryptbuf);
+    if (buf->bufkind == AGGREGATION) {
+      multipath_merge_buffers(tcpls, buf->decryptbuf);
+    }
     return TCPLS_OK;
   }
 }
@@ -1362,7 +1368,7 @@ int tcpls_internal_data_process(tcpls_t *tcpls, connect_info_t *con,  int recvre
  * // TODO adding configurable callbacks for TCPLS events
  */
 
-int tcpls_receive(ptls_t *tls, ptls_buffer_t *decryptbuf, struct timeval *tv) {
+int tcpls_receive(ptls_t *tls, tcpls_buffer_t *buf, struct timeval *tv) {
   fd_set rset;
   int selectret;
   tcpls_t *tcpls = tls->tcpls;
@@ -1382,7 +1388,7 @@ int tcpls_receive(ptls_t *tls, ptls_buffer_t *decryptbuf, struct timeval *tv) {
     return -1;
   }
   /* Call a scheduler from rsched.c */
-  if (tcpls->schedule_receive(tcpls, &rset, decryptbuf, NULL) < 0)
+  if (tcpls->schedule_receive(tcpls, &rset, buf, NULL) < 0)
     return -1;
   /** flush an ack if needed */
   if (send_ack_if_needed(tcpls, NULL))
@@ -1558,11 +1564,12 @@ static int cmp_uint32(void *mpseq1, void *mpseq2) {
  */
 
 static int try_decrypt_with_multistreams(tcpls_t *tcpls, const void *input,
-    ptls_buffer_t *decryptbuf, size_t *input_off, size_t input_size) {
+    tcpls_buffer_t *buf, size_t *input_off, size_t input_size) {
   int rret = 1;
   int ret;
   size_t consumed;
   int restore_buf = 0;
+  ptls_buffer_t *decryptbuf = NULL;
   connect_info_t *con = connection_get(tcpls, tcpls->transportid_rcv);
   /** if we have something in tcpls->buffrag, let's push it to this
    * con->buffrag*/
@@ -1588,6 +1595,10 @@ static int try_decrypt_with_multistreams(tcpls_t *tcpls, const void *input,
       /** We might have no stream attached server-side */
       tcpls->tls->traffic_protection.dec.aead = stream->aead_dec;
       tcpls->streamid_rcv = stream->streamid;
+      if (buf->bufkind == AGGREGATION)
+        decryptbuf = buf->decryptbuf;
+      else
+        decryptbuf = tcpls_get_stream_buffer(buf, stream->streamid);
       do {
         consumed = input_size - *input_off;
         rret = ptls_receive(tcpls->tls, decryptbuf, con->buffrag, input + *input_off, &consumed);
@@ -1604,9 +1615,12 @@ static int try_decrypt_with_multistreams(tcpls_t *tcpls, const void *input,
   if (rret == PTLS_ALERT_BAD_RECORD_MAC) {
     if (restore_buf && tcpls->buffrag->capacity)
       tcpls->buffrag->off = restore_buf;
+    /* That MUST be a control message */
+    ptls_buffer_t deccontrolbuf;
+    ptls_buffer_init(&deccontrolbuf, "", 0);
     do {
       consumed = input_size - *input_off;
-      rret = ptls_receive(tcpls->tls, decryptbuf, tcpls->buffrag, input + *input_off, &consumed);
+      rret = ptls_receive(tcpls->tls, &deccontrolbuf, tcpls->buffrag, input + *input_off, &consumed);
       *input_off += consumed;
     } while (rret == 0 && *input_off < input_size);
     tcpls->buffrag->off = 0;

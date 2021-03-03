@@ -15,6 +15,9 @@ typedef enum queue_ret {
   EMPTY
 } queue_ret_t;
 
+/** Used for failover to retain what sequence number and record length are
+ * within our sending buffer */
+
 struct st_tcpls_record_fifo_t {
   int max_record_num;
   int size;
@@ -25,6 +28,43 @@ struct st_tcpls_record_fifo_t {
   int back_idx;
 };
 
+/* exposes a per-stream buffer abstraction to the application for the
+ * multi-connection non-aggregation mode */
+
+enum buf_kind {AGGREGATION, STREAMBASED};
+
+struct st_tcpls_stream_buffer {
+  ptls_buffer_t *decryptbuf;
+  streamid_t streamid;
+};
+
+struct st_tcpls_buffer {
+  enum buf_kind bufkind;
+  union {
+    struct { ptls_buffer_t *decryptbuf; };
+    struct {
+      list_t *stream_buffers;
+      list_t *wtr_streams;
+      /** we usually add streamid in order anyway. Try not to reorder if the
+       * added value is greated than the max_streamid */
+      streamid_t max_streamid;
+    };
+  };
+};
+
+/* create a tcpls_buffer_t* to use in a non-aggregated mode */
+tcpls_buffer_t *tcpls_stream_buffers_new(int nbr_expected_streams);
+/* create a tcpls_buffer_t* to use in aggregated mode */
+tcpls_buffer_t *tcpls_aggr_buffer_new(void);
+
+int tcpls_stream_buffer_add(tcpls_buffer_t *buffer, streamid_t streamid);
+
+int tcpls_stream_buffer_remove(tcpls_buffer_t *buffer, streamid_t streamid);
+
+/* should be O(log(n)) over a sorted array with sparse ids */
+ptls_buffer_t *tcpls_get_stream_buffer(tcpls_buffer_t *buffer, streamid_t streamid);
+
+void tcpls_buffer_free(tcpls_buffer_t *buf);
 
 tcpls_record_fifo_t *tcpls_record_queue_new(int max_record_num);
 

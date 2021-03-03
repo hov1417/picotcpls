@@ -1,6 +1,7 @@
 #include "containers.h"
 #include "picotls.h"
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
 /* ===========================FIFO======================================= */
@@ -188,3 +189,146 @@ void list_free(list_t *list) {
   free(list->items);
   free(list);
 }
+
+/*********************Stream buffers ****************************/
+
+static int stream_buffer_cmp(const void *elem1, const void *elem2) {
+  struct st_tcpls_stream_buffer *stream_buf1 = (struct st_tcpls_stream_buffer*) elem1;
+  struct st_tcpls_stream_buffer *stream_buf2 = (struct st_tcpls_stream_buffer*) elem1;
+  int val = stream_buf1->streamid - stream_buf2->streamid;
+  if (val < 0)
+    return -1;
+  else if (val == 0)
+    return 0;
+  else
+    return 1;
+}
+
+tcpls_buffer_t *tcpls_stream_buffers_new(int nbr_expect_streams) {
+  tcpls_buffer_t *buf = malloc(sizeof(tcpls_buffer_t));
+  if (!buf)
+    return NULL;
+  memset(buf, 0, sizeof(tcpls_buffer_t));
+  buf->bufkind = STREAMBASED;
+  buf->stream_buffers = new_list(sizeof(struct st_tcpls_stream_buffer), nbr_expect_streams);
+  buf->wtr_streams = new_list(sizeof(streamid_t), nbr_expect_streams);
+  if (!buf->stream_buffers || !buf->wtr_streams)
+    return NULL;
+  return buf;
+}
+/**
+ * Creates a buffer expected to be used by the applcation when  the aggregation
+ * mode is enabled
+ */
+tcpls_buffer_t *tcpls_aggr_buffer_new(void) {
+  tcpls_buffer_t *buf = malloc(sizeof(tcpls_buffer_t));
+  if (!buf)
+    return NULL;
+  memset(buf, 0, sizeof(tcpls_buffer_t));
+  buf->bufkind = AGGREGATION;
+  buf->decryptbuf = malloc(sizeof(ptls_buffer_t));
+  if (!buf->decryptbuf) {
+    free(buf);
+    return NULL;
+  }
+  ptls_buffer_init(buf->decryptbuf, "", 0);
+  return buf;
+}
+
+
+/**
+ * When a stream is created, we need to add a buffer that the application can
+ * use. Maintain the list of buffer ordered
+ *
+ */
+
+int tcpls_stream_buffer_add(tcpls_buffer_t *buffers, streamid_t streamid) {
+  struct st_tcpls_stream_buffer stream_buffer;
+  memset(&stream_buffer, 0, sizeof(stream_buffer));
+  stream_buffer.decryptbuf = malloc(sizeof(ptls_buffer_t));
+  stream_buffer.streamid = streamid;
+  ptls_buffer_init(stream_buffer.decryptbuf, "", 0);
+  if (!stream_buffer.decryptbuf)
+    return -1;
+  list_add(buffers->stream_buffers, &stream_buffer);
+  if (streamid > buffers->max_streamid)
+    buffers->max_streamid = streamid;
+  else {
+    qsort(buffers->stream_buffers->items, buffers->stream_buffers->size,
+        sizeof(struct st_tcpls_stream_buffer), stream_buffer_cmp);
+  }
+  return 0;
+}
+
+int tcpls_stream_buffer_remove(tcpls_buffer_t *buffers, streamid_t streamid) {
+  struct st_tcpls_stream_buffer *stream_buffer;
+  if (streamid > buffers->max_streamid)
+    return -1;
+  /** Ensure that buffers->max_streamid is still relevant after removal */
+  else if (streamid == buffers->max_streamid && buffers->stream_buffers->size > 1) {
+    stream_buffer = list_get(buffers->stream_buffers, buffers->stream_buffers->size-2);
+    buffers->max_streamid = stream_buffer->streamid;
+  }
+  else if (streamid == buffers->max_streamid && buffers->stream_buffers->size == 1) {
+    buffers->max_streamid = 0;
+  }
+  for (int i = 0; i < buffers->stream_buffers->size; i++) {
+    stream_buffer = list_get(buffers->stream_buffers, i);
+    if (stream_buffer->streamid == streamid)
+      return list_remove(buffers->stream_buffers, stream_buffer);
+  }
+  return -1;
+}
+
+static struct st_tcpls_stream_buffer * pivot_search_stream_buffer(tcpls_buffer_t *buffers, int left, int right, streamid_t streamid) {
+  int center = (right+left)/2;
+  struct st_tcpls_stream_buffer *stream_buffer;
+  stream_buffer = list_get(buffers->stream_buffers, center);
+  if (stream_buffer->streamid == streamid)
+    return stream_buffer;
+  else if (left == right)
+    return NULL;
+  else if (stream_buffer->streamid < streamid)
+    return pivot_search_stream_buffer(buffers, center+1, right, streamid);
+  else
+    return pivot_search_stream_buffer(buffers, left, center, streamid);
+}
+
+/**
+ * Does a binary search of the streamid
+ */
+
+ptls_buffer_t *tcpls_get_stream_buffer(tcpls_buffer_t *buffers, streamid_t streamid) {
+  if (streamid < 0 || streamid > buffers->max_streamid)
+    return NULL;
+  struct st_tcpls_stream_buffer *stream_buffer = pivot_search_stream_buffer(buffers, 0, buffers->stream_buffers->size-1, streamid);
+  if (stream_buffer) {
+    return stream_buffer->decryptbuf;
+  }
+  else {
+    return NULL;
+  }
+}
+
+
+/**
+ * Free a tcpls_buffer_t *
+ */
+void tcpls_buffer_free(tcpls_buffer_t *buf) {
+  if (!buf)
+    return;
+  if (buf->bufkind == AGGREGATION) {
+    ptls_buffer_dispose(buf->decryptbuf);
+  }
+  else {
+    for (int i = 0; i < buf->stream_buffers->size; i++) {
+      ptls_buffer_t *decbuf = (ptls_buffer_t *) list_get(buf->stream_buffers, i);
+      ptls_buffer_dispose(decbuf);
+    }
+    list_free(buf->stream_buffers);
+    list_free(buf->wtr_streams);
+  }
+  free(buf);
+}
+
+

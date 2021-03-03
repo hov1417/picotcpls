@@ -314,7 +314,7 @@ struct st_tcpls_t {
    * Scheduler callback for the receiver. Can be set by the application to
    * instrument how multiple connections should pull bytes.
    */
-  int (*schedule_receive)(tcpls_t *tcpls, fd_set *rset, ptls_buffer_t *decryptbuf, void *data);
+  int (*schedule_receive)(tcpls_t *tcpls, fd_set *rset, tcpls_buffer_t *decryptbuf, void *data);
 
   /**
    * Set to 1 if the other peer also announced it supports Encrypted TCP
@@ -362,7 +362,7 @@ int tcpls_send(ptls_t *tls, streamid_t streamid, const void *input, size_t nbyte
  * Eventually read bytes and pu them in input -- Make sure the socket is
  * in blocking mode
  */
-int tcpls_receive(ptls_t *tls, ptls_buffer_t *input, struct timeval *tv);
+int tcpls_receive(ptls_t *tls, tcpls_buffer_t *input, struct timeval *tv);
 
 int tcpls_set_user_timeout(tcpls_t *tcpls, int transportid, uint16_t value,
     uint16_t msec_or_sec, uint8_t setlocal, uint8_t settopeer);
@@ -379,7 +379,7 @@ void tcpls_free(tcpls_t *tcpls);
 /*============================================================================*/
 /** Internal to picotls */
 
-int tcpls_internal_data_process(tcpls_t *tcpls, connect_info_t *con, int recvret, ptls_buffer_t *decryptbuf);
+int tcpls_internal_data_process(tcpls_t *tcpls, connect_info_t *con, int recvret, tcpls_buffer_t *decryptbuf);
 
 int get_tcpls_header_size(tcpls_t *tcpls, uint8_t type, tcpls_enum_t message);
 
