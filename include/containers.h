@@ -53,9 +53,9 @@ struct st_tcpls_buffer {
 };
 
 /* create a tcpls_buffer_t* to use in a non-aggregated mode */
-tcpls_buffer_t *tcpls_stream_buffers_new(int nbr_expected_streams);
+tcpls_buffer_t *tcpls_stream_buffers_new(tcpls_t *tcpls, int nbr_expected_streams);
 /* create a tcpls_buffer_t* to use in aggregated mode */
-tcpls_buffer_t *tcpls_aggr_buffer_new(void);
+tcpls_buffer_t *tcpls_aggr_buffer_new(tcpls_t *tcpls);
 
 int tcpls_stream_buffer_add(tcpls_buffer_t *buffer, streamid_t streamid);
 
@@ -64,7 +64,7 @@ int tcpls_stream_buffer_remove(tcpls_buffer_t *buffer, streamid_t streamid);
 /* should be O(log(n)) over a sorted array with sparse ids */
 ptls_buffer_t *tcpls_get_stream_buffer(tcpls_buffer_t *buffer, streamid_t streamid);
 
-void tcpls_buffer_free(tcpls_buffer_t *buf);
+void tcpls_buffer_free(tcpls_t *tcpls, tcpls_buffer_t *buf);
 
 tcpls_record_fifo_t *tcpls_record_queue_new(int max_record_num);
 

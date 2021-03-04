@@ -204,7 +204,15 @@ static int stream_buffer_cmp(const void *elem1, const void *elem2) {
     return 1;
 }
 
-tcpls_buffer_t *tcpls_stream_buffers_new(int nbr_expect_streams) {
+/**
+ * Create a new tcpls_buffer_t * with rooms for nbr_expected_streams buffers.
+ *
+ * /!\ returns NULL if a tcpls_buffer_t * has already been created /!\
+ */
+
+tcpls_buffer_t *tcpls_stream_buffers_new(tcpls_t *tcpls, int nbr_expect_streams) {
+  if (tcpls->buffer)
+    return NULL;
   tcpls_buffer_t *buf = malloc(sizeof(tcpls_buffer_t));
   if (!buf)
     return NULL;
@@ -214,13 +222,27 @@ tcpls_buffer_t *tcpls_stream_buffers_new(int nbr_expect_streams) {
   buf->wtr_streams = new_list(sizeof(streamid_t), nbr_expect_streams);
   if (!buf->stream_buffers || !buf->wtr_streams)
     return NULL;
+  tcpls->buffer = buf;
+  /** In case the application changes its aggregation-based buffer to a
+   * stream-based buffering in the middle of the connection */
+  if (tcpls->streams->size > 0) {
+    tcpls_stream_t *stream;
+    for (int i = 0; i < tcpls->streams->size; i++) {
+      stream = list_get(tcpls->streams, i);
+      if (stream->stream_usable)
+        tcpls_stream_buffer_add(buf, stream->streamid);
+    }
+  }
   return buf;
 }
 /**
  * Creates a buffer expected to be used by the applcation when  the aggregation
  * mode is enabled
+ * /!\ returns NULL if a tcpls_buffer_t * has already been created /!\
  */
-tcpls_buffer_t *tcpls_aggr_buffer_new(void) {
+tcpls_buffer_t *tcpls_aggr_buffer_new(tcpls_t *tcpls) {
+  if (tcpls->buffer)
+    return NULL;
   tcpls_buffer_t *buf = malloc(sizeof(tcpls_buffer_t));
   if (!buf)
     return NULL;
@@ -232,6 +254,7 @@ tcpls_buffer_t *tcpls_aggr_buffer_new(void) {
     return NULL;
   }
   ptls_buffer_init(buf->decryptbuf, "", 0);
+  tcpls->buffer = buf;
   return buf;
 }
 
@@ -314,7 +337,7 @@ ptls_buffer_t *tcpls_get_stream_buffer(tcpls_buffer_t *buffers, streamid_t strea
 /**
  * Free a tcpls_buffer_t *
  */
-void tcpls_buffer_free(tcpls_buffer_t *buf) {
+void tcpls_buffer_free(tcpls_t *tcpls, tcpls_buffer_t *buf) {
   if (!buf)
     return;
   if (buf->bufkind == AGGREGATION) {
@@ -322,12 +345,13 @@ void tcpls_buffer_free(tcpls_buffer_t *buf) {
   }
   else {
     for (int i = 0; i < buf->stream_buffers->size; i++) {
-      ptls_buffer_t *decbuf = (ptls_buffer_t *) list_get(buf->stream_buffers, i);
-      ptls_buffer_dispose(decbuf);
+      struct st_tcpls_stream_buffer *stream_buffer = (struct st_tcpls_stream_buffer *) list_get(buf->stream_buffers, i);
+      ptls_buffer_dispose(stream_buffer->decryptbuf);
     }
     list_free(buf->stream_buffers);
     list_free(buf->wtr_streams);
   }
+  tcpls->buffer = NULL;
   free(buf);
 }
 

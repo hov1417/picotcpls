@@ -964,7 +964,7 @@ int tcpls_accept(tcpls_t *tcpls, int socket, uint8_t *cookie, uint32_t transport
  * src might be NULL to indicate default
  *
  * returns 0 if a stream is alreay attached for addr, or if some error occured
- * 
+ *
  * XXX create a stream to a transport id instread of addresses!
  */
 
@@ -1150,6 +1150,9 @@ static int stream_close_helper(tcpls_t *tcpls, tcpls_stream_t *stream, int type,
     tcpls->streams_marked_for_close = 1;
   }
   stream->stream_usable = 0;
+  if (tcpls->buffer->bufkind == STREAMBASED) {
+    tcpls_stream_buffer_remove(tcpls->buffer, stream->streamid);
+  }
   return 0;
 }
 
@@ -3230,6 +3233,7 @@ static int new_stream_derive_aead_context(ptls_t *tls, tcpls_stream_t *stream, i
 
 static tcpls_stream_t *stream_new(ptls_t *tls, streamid_t streamid,
     connect_info_t *con, uint32_t offset, int is_client_origin) {
+  tcpls_t *tcpls = tls->tcpls;
   tcpls_stream_t *stream = malloc(sizeof(*stream));
   memset(stream, 0, sizeof(tcpls_stream_t));
   stream->streamid = streamid;
@@ -3240,6 +3244,9 @@ static tcpls_stream_t *stream_new(ptls_t *tls, streamid_t streamid,
   stream->sendbuf = malloc(sizeof(ptls_buffer_t));
   ptls_buffer_init(stream->sendbuf, "", 0);
   stream->offset = offset;
+  if (tcpls->buffer && tcpls->buffer->bufkind == STREAMBASED) {
+    tcpls_stream_buffer_add(tcpls->buffer, streamid);
+  }
   if (tls->tcpls->enable_failover)
     stream->send_queue = tcpls_record_queue_new(2000);
   if (ptls_handshake_is_complete(tls)) {

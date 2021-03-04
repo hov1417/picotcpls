@@ -244,7 +244,12 @@ struct st_tcpls_t {
   /** Our addresses */
   tcpls_v4_addr_t *ours_v4_addr_llist;
   tcpls_v6_addr_t *ours_v6_addr_llist;
-  
+  /**
+   * pointer to the Application-created buffer -- Only one may be created at a
+   * time
+   **/
+  tcpls_buffer_t *buffer;
+
   /**
    *  enable failover; used for rst resistance in case of 
    *  network outage .. If multiple connections are available

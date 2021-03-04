@@ -1254,10 +1254,12 @@ static void test_sends_varlen_bpf_prog(void)
   
   ptls_buffer_init(&cbuf, "", 0);
   ptls_buffer_init(&sbuf, "", 0);
-  tcpls_t *tcpls_client = tcpls_new(ctx, 0);
+  tcpls_t *tcpls_client =   tcpls_new(ctx, 0);
   tcpls_t *tcpls_server = tcpls_new(ctx_peer, 1);
   client = tcpls_client->tls;
   server = tcpls_server->tls;
+  tcpls_buffer_t *client_buf = tcpls_aggr_buffer_new(tcpls_client);
+  tcpls_buffer_t *server_buf = tcpls_aggr_buffer_new(tcpls_server);
   connect_info_t con;
   memset(&con, 0, sizeof(con));
   con.state = JOINED;
@@ -1285,10 +1287,10 @@ static void test_sends_varlen_bpf_prog(void)
   inet_pton(AF_INET, "192.168.1.1", &addr.sin_addr);
   addr.sin_family = AF_INET;
   ok(tcpls_add_v4(tcpls_server->tls, &addr, 1, 0, 0) == 0);
-  ptls_buffer_init(&decbuf, "", 0);
   streamid_t streamid = tcpls_stream_new(server, NULL, (struct sockaddr*) &addr);
   ok(tcpls_streams_attach(server, 0, 0) == 0);
   consumed = tcpls_server->sendbuf->off;
+  decbuf = *client_buf->decryptbuf;
   ret = ptls_receive(client, &decbuf, NULL, tcpls_server->sendbuf->base, &consumed);
   ok(ret==0);
   ptls_buffer_dispose(&sbuf);
@@ -1322,6 +1324,8 @@ static void test_sends_varlen_bpf_prog(void)
   ok(found == 1);
   ctx->support_tcpls_options = 0;
   ctx_peer->support_tcpls_options = 0;
+  tcpls_buffer_free(tcpls_client, client_buf);
+  tcpls_buffer_free(tcpls_server, server_buf);
   tcpls_free(tcpls_client);
   tcpls_free(tcpls_server);
 }
@@ -1417,6 +1421,8 @@ static void test_sends_tcpls_record(void)
   size_t consumed;
   tcpls_t *tcpls_client = tcpls_new(ctx, 0);
   tcpls_t *tcpls_server = tcpls_new(ctx_peer, 1);
+  tcpls_buffer_t *srv_buf = tcpls_aggr_buffer_new(tcpls_server);
+  tcpls_buffer_t *client_buf = tcpls_aggr_buffer_new(tcpls_client);
   ptls_buffer_init(&cbuf, "", 0);
   ptls_buffer_init(&sbuf, "", 0);
 
@@ -1453,7 +1459,6 @@ static void test_sends_tcpls_record(void)
       PTLS_ERROR_CONN_NOT_FOUND);
   
   cbuf.off = 0;
-  ptls_buffer_init(&decbuf, "", 0);
   struct sockaddr_in addr;
   bzero(&addr, sizeof(addr));
   inet_pton(AF_INET, "192.168.1.1", &addr.sin_addr);
@@ -1462,6 +1467,7 @@ static void test_sends_tcpls_record(void)
   streamid_t streamid = tcpls_stream_new(client, NULL, (struct sockaddr*) &addr);
   ok(tcpls_streams_attach(client, 0, 0) == 0);
   consumed = tcpls_client->sendbuf->off;
+  decbuf = *srv_buf->decryptbuf;
   ret = ptls_receive(server, &decbuf, NULL, tcpls_client->sendbuf->base, &consumed);
   ok(ret==0);
   ret = tcpls_send_tcpoption(tcpls_client, 0, USER_TIMEOUT, 0);
@@ -1499,8 +1505,11 @@ static void test_sends_tcpls_record(void)
 
   ptls_buffer_dispose(&cbuf);
   ptls_buffer_dispose(&sbuf);
+  tcpls_buffer_free(tcpls_server, srv_buf);
+  tcpls_buffer_free(tcpls_client, client_buf);
   tcpls_free(tcpls_client);
   tcpls_free(tcpls_server);
+  
   ctx->support_tcpls_options = 0;
   ctx_peer->support_tcpls_options = 0;
 }
@@ -2312,58 +2321,92 @@ static void test_tcpls_api(void)
 
 static void test_list_t(void)
 {
-list_t *list64 = new_list(sizeof(uint64_t), 10);
-assert(list64);
-ok(list64->size == 0);
-uint64_t item1 = 42;
-ok(list_add(list64, &item1) == 0);
-ok(list64->size == 1);
-for (int i = 0; i < 20; i++) {
-  item1++;
+  list_t *list64 = new_list(sizeof(uint64_t), 10);
+  assert(list64);
+  ok(list64->size == 0);
+  uint64_t item1 = 42;
+  ok(list_add(list64, &item1) == 0);
+  ok(list64->size == 1);
+  for (int i = 0; i < 20; i++) {
+    item1++;
+    list_add(list64, &item1);
+  }
+  ok(list64->size == 21);
+  uint64_t item2 = 64;
+  list_add(list64, &item2);
   list_add(list64, &item1);
-}
-ok(list64->size == 21);
-uint64_t item2 = 64;
-list_add(list64, &item2);
-list_add(list64, &item1);
-uint64_t *item3 = list_get(list64, 21);
-ok(*item3 == item2);
-item1 = 42;
-uint64_t item4 = 4242424242;
-ok(list_remove(list64, &item1) == 0);
-ok(list64->size == 22);
-ok(*(uint64_t*) list_get(list64, 0) == 43);
-ok(*(uint64_t*) list_get(list64, 2) == 45);
-ok(list_remove(list64, &item4) == -1);
-list_free(list64);
+  uint64_t *item3 = list_get(list64, 21);
+  ok(*item3 == item2);
+  item1 = 42;
+  uint64_t item4 = 4242424242;
+  ok(list_remove(list64, &item1) == 0);
+  ok(list64->size == 22);
+  ok(*(uint64_t*) list_get(list64, 0) == 43);
+  ok(*(uint64_t*) list_get(list64, 2) == 45);
+  ok(list_remove(list64, &item4) == -1);
+  list_free(list64);
 }
 
 static void test_record_fifo_t(void)
 {
-tcpls_record_fifo_t *r_fifo = tcpls_record_queue_new(3);
-ok(r_fifo->size == 0);
-ok(r_fifo->max_record_num == 3);
-struct st_ptls_record_t rec;
-memset(&rec, 0, sizeof(rec));
-ok(tcpls_record_queue_push(r_fifo, 0, 1) == OK);
-ok(tcpls_record_queue_push(r_fifo, 1, 1) == OK);
-ok(tcpls_record_queue_seq(r_fifo) == 0);
-ok(tcpls_record_queue_push(r_fifo, 2, 1) == OK);
-ok(r_fifo->front_idx == 0);
-ok(tcpls_record_queue_del(r_fifo, 1) == OK);
-ok(tcpls_record_queue_seq(r_fifo) == 1);
-ok(tcpls_record_queue_del(r_fifo, 2) == OK);
-ok(tcpls_record_queue_del(r_fifo, 1) == EMPTY);
-ok(tcpls_record_queue_push(r_fifo, 4, 1) == OK);
-ok(tcpls_record_queue_del(r_fifo, 1) == OK);
-ok(r_fifo->front_idx == r_fifo->back_idx);
-tcpls_record_fifo_free(r_fifo);
+  tcpls_record_fifo_t *r_fifo = tcpls_record_queue_new(3);
+  ok(r_fifo->size == 0);
+  ok(r_fifo->max_record_num == 3);
+  struct st_ptls_record_t rec;
+  memset(&rec, 0, sizeof(rec));
+  ok(tcpls_record_queue_push(r_fifo, 0, 1) == OK);
+  ok(tcpls_record_queue_push(r_fifo, 1, 1) == OK);
+  ok(tcpls_record_queue_seq(r_fifo) == 0);
+  ok(tcpls_record_queue_push(r_fifo, 2, 1) == OK);
+  ok(r_fifo->front_idx == 0);
+  ok(tcpls_record_queue_del(r_fifo, 1) == OK);
+  ok(tcpls_record_queue_seq(r_fifo) == 1);
+  ok(tcpls_record_queue_del(r_fifo, 2) == OK);
+  ok(tcpls_record_queue_del(r_fifo, 1) == EMPTY);
+  ok(tcpls_record_queue_push(r_fifo, 4, 1) == OK);
+  ok(tcpls_record_queue_del(r_fifo, 1) == OK);
+  ok(r_fifo->front_idx == r_fifo->back_idx);
+  tcpls_record_fifo_free(r_fifo);
+}
+
+static void test_tcpls_buffer_t(void)
+{
+  tcpls_t *tcpls = tcpls_new(ctx, 0);
+  tcpls_buffer_t *buf = tcpls_aggr_buffer_new(tcpls);
+  ok(!tcpls_aggr_buffer_new(tcpls));
+  ptls_buffer_t *decbuf = buf->decryptbuf;
+  assert(decbuf);
+  ok(decbuf->off == 0);
+  tcpls_buffer_free(tcpls, buf);
+  buf = tcpls_stream_buffers_new(tcpls, 5);
+  struct sockaddr_in addr;
+  bzero(&addr, sizeof(addr));
+  inet_pton(AF_INET, "192.168.1.1", &addr.sin_addr);
+  addr.sin_family = AF_INET;
+  ok(tcpls_add_v4(tcpls->tls, &addr, 1, 0, 0) == 0);
+  streamid_t stream1 = tcpls_stream_new(tcpls->tls, NULL, (struct sockaddr *) &addr);
+  ok(stream1 > 0);
+  ok(buf->stream_buffers->size == 1);
+  decbuf = tcpls_get_stream_buffer(buf, stream1);
+  assert(decbuf);
+  ok(decbuf->off == 0);
+  streamid_t stream2 = tcpls_stream_new(tcpls->tls, NULL, (struct sockaddr *) &addr);
+  ok(buf->stream_buffers->size == 2);
+  ptls_buffer_t *decbuf2 = tcpls_get_stream_buffer(buf, stream2);
+  ok(decbuf != decbuf2);
+  tcpls_stream_buffer_remove(buf, stream2);
+  ok(buf->stream_buffers->size == 1);
+  decbuf2 = tcpls_get_stream_buffer(buf, stream2);
+  ok(!decbuf2);
+  tcpls_buffer_free(tcpls, buf);
+  tcpls_free(tcpls);
 }
 
 static void test_containers(void)
 {
-subtest("list_t", test_list_t);
-subtest("record_fifo_t", test_record_fifo_t);
+  subtest("list_t", test_list_t);
+  subtest("record_fifo_t", test_record_fifo_t);
+  subtest("tcpls_buffer_t", test_tcpls_buffer_t);
 }
 
 static void test_quic(void)
