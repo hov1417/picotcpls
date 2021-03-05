@@ -284,10 +284,11 @@ message on it anyway.
 Multipath can be seamlessly enabled by opening streams on different destinations
 of the same TCPLS connection. There is two multipath modes. One that
 gives a global ordering for all stream data, such that you can schedule
-your application data in any stream.
+your application data in any stream. One that gives independent streams
+of ordered data.
 
-To enable it, both the client and the server have to set it on the tcpls
-object:
+To enable the global ordering, both the client and the server have to
+set it on the tcpls object:
 
 `tcpls->enable_multipath=1`
 
@@ -305,7 +306,12 @@ some context, but require a bit more work at the application layer.
 The current implementation logic is to make the sender multipath aware,
 and the receiver agnostic. That is, the only control the receiver has on
 the multipath notion is from the scheduler used when calling
-`tcpls_receive`. This scheduler can be set by the receiver TODO.
+`tcpls_receive`. This scheduler can be set by the receiver with a
+function pointer in `tcpls->schedule_receive`. By default, a round robin
+between internal connections is used. If you want to write your
+scheduler, you need to dive a bit in rsched.c. Basically, you just need
+to call one TCPLS internal function, and understand a bit TCPLS's inner
+working with connections.
 
 
 ### Sending / receiving data
