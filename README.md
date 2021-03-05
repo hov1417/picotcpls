@@ -11,31 +11,39 @@ Picotcpls is a fork of [picotls](https://github.com/h2o/picotls), a  [TLS 1.3 (R
   * support for PSK, PSK-DHE resumption using 0-RTT
   * API for dealing directly with TLS handshake messages (essential for QUIC)
   * support for new extensions: Encrypted SNI (wg-draft-02), Certificate Compression (wg-draft-10)
-* From TCPLS:
+* picotcpls builds on the top of picotls:
   * API to deal with a novel TCP extensibility mechanism
     * Allows setting and configuring the peer's TCP stack for our
       connections
     * Can inject BPF bytecode to the peer to set a new congestion
       control mechanism
     * Essentially any TCP socket option (a few are supported so far)
-  * A wrapper to handle network connections
   * QUIC-like streams
-  * 0-RTT TCPLS handshakes
-  * Application-level Connection Migration (simplistic API code flow to
-    trigger a migration)
-  * Multipath
-  * A Failover mechanism; a kind of automatic connection
-    migration in case of network failure)
+  * A wrapper and API to handle network connections, streams, etc.
+  * 1-RTT initial handshake, 0-RTT Join handshake,  0-RTT successive handshakes
+  * Application-level Connection Migration: seamless transfer from one
+    network to another without goodput loss and easily managed from the
+    Application with the handshake and Stream APIs.
+  * Two Multipath modes:
+    * Pure aggregation over all streams
+    * Independently ordered streams, potentially over different TCP
+      connections (useful against HoL blocking and efficient bandwidth
+      aggregation of independent application-level objects sent in their own
+      stream)
+  * An optional on/off Failover mechanism: a kind of automatic connection
+    migration in case of network failure. Can make TCPLS's session
+    resist middlebox interference such as blackholing the network or sending
+    a spurious TCP RST, or a phone losing its Wi-Fi ...
   * Authenticated connection closing
-
 
 picotcpls is a research-level implementation of TCPLS, a novel
 cross-layer extensibility mechanism for TCP designed to offer a
 fine-grained control of the transport protocol to the application layer.
 The mere existence of this research comes from several observations:
 
-* Since Let's Encrypt's success, TLS is now massively deployed, and we should not expect unsecure TCP
-  connections to occur over untrusted networks anymore.
+* Since Let's Encrypt's success, TLS is now massively deployed, and we
+  should not expect unsecure TCP connections to occur over untrusted
+  networks anymore.
 * TCP suffers from severe extensibility issues caused by middlebox
   interferences, lack of space in its header and the difficulty to
   propagate new implementation features
