@@ -282,7 +282,7 @@ message on it anyway.
 #### Multipath
 
 Multipath can be seamlessly enabled by opening streams on different destinations
-of the same TCPLS connection. There is two multipath mode. One that
+of the same TCPLS connection. There is two multipath modes. One that
 gives a global ordering for all stream data, such that you can schedule
 your application data in any stream.
 
@@ -291,10 +291,11 @@ object:
 
 `tcpls->enable_multipath=1`
 
-Sending over the different streams would
-make the TCPLS aggregates the bandwith of the different TCP connection,
-assuming the internal reordering buffer does not reach its size limit
-(currently unspecified).  
+Sending over the different streams would make the TCPLS aggregates the
+bandwith of the different TCP connection, assuming the internal
+reordering buffer does not reach its size limit (currently unspecified;
+i.e., can potentially eat all your memory if a connection is much slower
+than the other).  
 
 If `tcpls->enable_multipath=0` is configured on both peer, the you must
 take care of sending a application-level object within the same stream,
@@ -321,7 +322,7 @@ returns the number of bytes sent (counting the TLS overhead).
 
 #### Receiving data
 
-`int tcpls_receive(ptls_t *tls, ptls_buffer_t *decryptbuf, struct timeval *tv)`
+`int tcpls_receive(ptls_t *tls, tcpls_buffer_t *buffer, struct timeval *tv)`
 
 returns either TCPLS_HOLD_DATA_TO_READ,
 TCPLS_HOLD_OUT_OF_ORDER_DATA_TO_READ, TCPLS_OK or -1
@@ -331,9 +332,37 @@ available. TCPLS_HOLD_OUT_OF_ORDER_DATA_TO_READ means that TCPLS hold
 some out of order data that we expect eventually be available to read.
 TCPLS_OK means that we have nothing more left.  
 
-All available data is put within decryptbuf.  The current number of
-bytes within the buffer can be reach with `decryptbuf->off`, and the
-pointer to the first byte is at `decryptbuf->base`.
+All available data is put within `buffer`. `tcpls_buffer_t` is a special
+type that you need to handle differently depending on the multipath
+mode. If you choose to have aggregated bandwidth, then you must pass a
+buffer created with `tcpls_aggr_buffer_new()`. The current number of
+bytes within such a buffer can be reached with `buffer->decryptbuf->off`, and the
+pointer to the first byte is at `buffer->decryptbuf->base`.
+
+If you choose to have independant paths (i.e., non-aggregated
+multipath), then you need to your buffer to be created with
+`tcpls_stream_buffers_new()`. After calling `tcpls_receive()`, you may
+know which of your stream buffers contain new bytes by looking into the
+list:
+
+`buffer->wtr_streams`
+
+```
+streamid_t *streamid;
+ptls_buffer_t *decryptbuf;
+for (int i = 0; i < buffer->wtr_streams->size; i++) {
+  streamid = list_get(buffer->wtr_streams, i);
+  /* This give you the buffer linked to your stream streamid */
+  decryptbuf = tcpls_get_stream_buffer(buffer, *streamid);
+  /* first byte: decryptbuf->base; number of bytes: decryptbuf->off */
+  ...
+}
+```
+You do not need to care about the capacity of the buffer. When you have
+consumed some bytes from them, change decryptbuf->off accordingly (i.e.,
+the memory will be overwritten at the next tcpls_receive call). If you
+do not touch decrytbuf->off, tcpls will keep appending data in the
+buffer.
 
 `tv` is a timeout which tells tcpls_receive how much time it must wait
 at most for a read() sys call. Setting NULL tells tcpls not to wait.
