@@ -32,7 +32,7 @@ Picotcpls is a fork of [picotls](https://github.com/h2o/picotls), a  [TLS 1.3 (R
       stream)
   * An optional on/off Failover mechanism: a kind of automatic connection
     migration in case of network failure. Can make TCPLS's session
-    resist middlebox interference such as blackholing the network or sending
+    resist middlebox interference such as blackholing the packets or sending
     a spurious TCP RST, or a phone losing its Wi-Fi ...
   * Authenticated connection closing
 
@@ -148,7 +148,7 @@ handshake, then TCPLS will send this address as part of a new
 EncryptedExtension. The client application is advertised of the new
 address through a connection event mechanism that we will discuss below.  
 
-If this function called before the handshake and the connection is
+If this function is called before the handshake and the connection is
 client-side, then the information will be sent as part of the first data
 sent during this connection. This restriction is designed to avoid
 making more entropy for fingerprinting, avoiding the client-side handshake to look
@@ -174,7 +174,7 @@ tcpls_connect(tls, src_v6, dest_v6, timeout);
 spawns two TCP connections between the two pairs of addresses, for which
 the second `tcpls_connect` waits until all connected or the timeout
 fired. TCPLS monitors at which speed those connection connected and
-automatically set as primary the one that connected the faster.
+automatically set as primary the fastest.
 Callbacks events are triggered when a connection succeeded, and the
 application may know which addresses are usable to attach streams, and
 which ones require to call tcpls_connect again in case the timeout fired.
@@ -197,13 +197,14 @@ Setting only src to `NULL` makes tcpls_connect uses the default system's
 routing rules to select a src address.
 
 New connections can be made at any time of the initial connection
-lifetime and may offer to the application an easy interface to program
-failover mechanism (or let TCPLS automatically handle failover) or
-aggregation of bandwidth with multipathing.
+lifetime and may offer to the application an easy interface to deal with
+application-level migrations (or let TCPLS automatically handle failover in case of failure) or
+aggregation of bandwidth with multipathing at any point of the
+connection lifetime.
 
 ### Handshake
 
-picotcpls simply offer a wrapper around picotls's interactive hanshake (`ptls_handshake`):  
+picotcpls offers a wrapper around picotls's interactive hanshake (`ptls_handshake`):  
 
 `tcpls_handshake(ptls_t *tls, ptls_handshake_properties_t *properties);`
 
@@ -227,32 +228,33 @@ each of the desired connection id.
 Server-side, if multiple addresses are announced to the client during
 the hanshake, the server must perform any next tcpls_handshake() with a
 configured mpjoin callback `int (*received_mpjoin_to_process)(int
-socket, uint8_t *connid, uint8_t *cookie)`  
+socket, uint8_t *sessid, uint8_t *cookie)`  
 
 `properties->received_mpjoin_to_process = &my_function;`
 
-TCPLS will pass the connid of the TCPLS session corresponding to the
+TCPLS will pass the sessid of the TCPLS session corresponding to the
 received JOIN, alongside the received one-time cookie and the socket
 in which this MPJOIN handshake was received. In this case
 tcpls_handshake() will return PTLS_ERROR_HANDSHAKE_IS_MPJOIN to indicate
 the server that this handshake wasn't from a new client. The server can
 then call `tcpls_accept(tcpls_t *tcpls, int socket, uint8_t
-*cookie, unint32_t transportid)` assuming it stored a mapping between connid and tcpls_t*. This
+*cookie, unint32_t transportid)` assuming it stored a mapping between sessid and tcpls_t*. This
 function would properly link the TCP connection to the given tcpls
 session if the cookie is valid.
 
 #### Handshake properties
 
 A set of handshake properties can be configured, which influences the
-behaviour of `tcpls_handshake()` such as connecting in 0-RTT TCP+TLS,
-connecting in 0-RTT in TLS only, joining an existing connection, etc.
+behaviour of `tcpls_handshake()` such as connecting in 1-RTT TCP+TLS or
+joining an existing connection, etc.
 
-#### TCPLS 0-RTT
+#### TCPLS initial 1-RTT
 
 `properties->client.zero_rtt` must be set to 1 prior to calling
 `tcpls_handshake`. Besides, no connection should have been already established
-over the link in which the tcpls handshake is about to take place.
-
+over the link in which the tcpls handshake is about to take place. This
+option makes TCPLS use TCP's TFO to send/receive the
+ClientHello/ServerHello.
 
 ### Adding / closing streams
 
@@ -282,10 +284,6 @@ the STREAM_CLOSE_ACK, TCPLS eventually also close the TCP connection if
 no other streams are attached. Callbacks for a STREAM_CLOSE are
 triggered when the stream is dettached (when it is ACKED, or when the
 STREAM_CLOSE is received).
-
-Note: might be better to trigger the callback when the STREAM_CLOSE is sent,
-and not when the STREAM_CLOSE_ACK is received. We cannot write any more
-message on it anyway.
 
 #### Multipath
 
@@ -385,7 +383,7 @@ at most for a read() sys call. Setting NULL tells tcpls not to wait.
 
 Several callbacks might be configured for events such as:
 
-* STREAM_OPEN, STREAM_CLOSE
+* STREAM_OPEN, STREAM_CLOSE, STREAM_FAILED, STREAM_RECOVERED
 * CONN_OPEN, CONN_CLOSE
 * JOIN
 
