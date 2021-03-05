@@ -44,7 +44,10 @@ typedef enum tcpls_enum_t {
   STREAM_CLOSE,
   STREAM_CLOSE_ACK,
   TRANSPORT_NEW,
-  TRANSPORT_UPDATE
+  TRANSPORT_UPDATE,
+  /* since it is a protocol message, make sure the enum is compiled into a 32
+   * bits representation */
+  tcpls_enum_sentinel = 4294967295UL
 } tcpls_enum_t;
 
 typedef enum tcpls_event_t {
