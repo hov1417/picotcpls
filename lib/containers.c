@@ -266,6 +266,8 @@ tcpls_buffer_t *tcpls_aggr_buffer_new(tcpls_t *tcpls) {
  */
 
 int tcpls_stream_buffer_add(tcpls_buffer_t *buffers, streamid_t streamid) {
+  if (buffers->bufkind != STREAMBASED)
+    return -1;
   struct st_tcpls_stream_buffer stream_buffer;
   memset(&stream_buffer, 0, sizeof(stream_buffer));
   stream_buffer.decryptbuf = malloc(sizeof(ptls_buffer_t));
@@ -284,6 +286,8 @@ int tcpls_stream_buffer_add(tcpls_buffer_t *buffers, streamid_t streamid) {
 }
 
 int tcpls_stream_buffer_remove(tcpls_buffer_t *buffers, streamid_t streamid) {
+  if (buffers->bufkind != STREAMBASED)
+    return -1;
   struct st_tcpls_stream_buffer *stream_buffer;
   if (streamid > buffers->max_streamid)
     return -1;
@@ -322,7 +326,7 @@ static struct st_tcpls_stream_buffer * pivot_search_stream_buffer(tcpls_buffer_t
  */
 
 ptls_buffer_t *tcpls_get_stream_buffer(tcpls_buffer_t *buffers, streamid_t streamid) {
-  if (streamid < 0 || streamid > buffers->max_streamid)
+  if (streamid < 0 || streamid > buffers->max_streamid || buffers->stream_buffers->size == 0)
     return NULL;
   struct st_tcpls_stream_buffer *stream_buffer = pivot_search_stream_buffer(buffers, 0, buffers->stream_buffers->size-1, streamid);
   if (stream_buffer) {

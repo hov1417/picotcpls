@@ -97,10 +97,20 @@ struct conn_to_tcpls {
   int transportid;
   unsigned int is_primary : 1;
   streamid_t streamid;
+  tcpls_buffer_t *recvbuf;
+  int buf_off_val; /* remember the value before read */
   unsigned int wants_to_write : 1;
   tcpls_t *tcpls;
   unsigned int to_remove : 1;
 };
+
+static void conn_tcpls_free(list_t *conn_to_tcpls) {
+  struct conn_to_tcpls *conn;
+  for (int i = 0; i < conn_to_tcpls->size; i++) {
+    conn = list_get(conn_to_tcpls, i);
+    tcpls_buffer_free(conn->tcpls, conn->recvbuf);
+  }
+}
 
 struct cli_data {
   list_t *socklist;
@@ -386,7 +396,7 @@ static void tcpls_add_ips(tcpls_t *tcpls, struct sockaddr_storage *sa_our,
       tcpls_add_v6(tcpls->tls, (struct sockaddr_in6*)&sa_peer[i], 0, 0, 0);
   }
 }
-static int handle_tcpls_read(tcpls_t *tcpls, int socket, ptls_buffer_t *buf) {
+static int handle_tcpls_read(tcpls_t *tcpls, int socket, tcpls_buffer_t *buf, list_t *streamlist, list_t *conn_tcpls) {
 
   int ret;
   if (!ptls_handshake_is_complete(tcpls->tls) && tcpls->tls->state <
@@ -412,13 +422,79 @@ static int handle_tcpls_read(tcpls_t *tcpls, int socket, ptls_buffer_t *buf) {
   }
   struct timeval timeout;
   memset(&timeout, 0, sizeof(timeout));
-  int init_size = buf->off;
+  int *init_sizes;
+  if (tcpls->tls->is_server) {
+    init_sizes = malloc(sizeof(int)*conn_tcpls->size);
+  }
+  else {
+    init_sizes = malloc(sizeof(int)*streamlist->size);
+  }
+  memset(init_sizes, 0, sizeof(*init_sizes));
+  if (buf->bufkind == AGGREGATION)
+    init_sizes[0] = buf->decryptbuf->off;
+  else {
+    streamid_t *streamid;
+    ptls_buffer_t *decryptbuf;
+    if (!tcpls->tls->is_server) {
+      for (int i = 0; i < streamlist->size; i++) {
+        streamid = list_get(streamlist, i);
+        decryptbuf = tcpls_get_stream_buffer(buf, *streamid);
+        init_sizes[i] = decryptbuf->off;
+      }
+    }
+    else {
+      /*server read */
+      struct conn_to_tcpls *conn;
+      for (int i = 0; i < conn_tcpls->size; i++) {
+        conn = list_get(conn_tcpls, i);
+        if (conn->tcpls == tcpls) {
+          decryptbuf = tcpls_get_stream_buffer(buf, conn->streamid);
+          if (decryptbuf) {
+            init_sizes[i] = decryptbuf->off;
+          }
+        }
+      }
+    }
+  }
   while ((ret = tcpls_receive(tcpls->tls, buf, &timeout)) == TCPLS_HOLD_DATA_TO_READ)
     ;
   if (ret < 0) {
     fprintf(stderr, "tcpls_receive returned %d\n",ret);
   }
-  ret = buf->off-init_size;
+  if (buf->bufkind == AGGREGATION)
+    ret = buf->decryptbuf->off-init_sizes[0];
+  else {
+    streamid_t *wtr_streamid, *streamid;
+    ptls_buffer_t *decryptbuf;
+    for (int i = 0; i < buf->wtr_streams->size; i++) {
+      wtr_streamid = list_get(buf->wtr_streams, i);
+      if (!tcpls->tls->is_server) {
+        for (int j = 0; j < streamlist->size; j++) {
+          streamid = list_get(streamlist, j);
+          if (*wtr_streamid == *streamid) {
+            decryptbuf = tcpls_get_stream_buffer(buf, *streamid);
+            if (decryptbuf) {
+              ret += decryptbuf->off-init_sizes[j];
+              j = streamlist->size;
+            }
+          }
+        }
+      }
+      else {
+        struct conn_to_tcpls *conn;
+        for (int j = 0; j < conn_tcpls->size; j++) {
+          conn = list_get(conn_tcpls, j);
+          if (conn->tcpls == tcpls && *wtr_streamid == conn->streamid) {
+             decryptbuf = tcpls_get_stream_buffer(buf, *wtr_streamid);
+             if (decryptbuf) {
+               ret += decryptbuf->off - init_sizes[j];
+               j = conn_tcpls->size;
+             }
+          }
+        }
+      }
+    }
+  }
   return ret;
 }
 
@@ -459,29 +535,28 @@ static int handle_tcpls_write(tcpls_t *tcpls, struct conn_to_tcpls *conntotcpls,
 
 static int handle_server_zero_rtt_test(list_t *conn_tcpls, fd_set *readset) {
   int ret = 1;
-  ptls_buffer_t recvbuf;
-  ptls_buffer_init(&recvbuf, "", 0);
   for (int i = 0; i < conn_tcpls->size; i++) {
     struct conn_to_tcpls *conn = list_get(conn_tcpls, i);
     if (FD_ISSET(conn->conn_fd, readset) && conn->state >= CONNECTED) {
-      ret = handle_tcpls_read(conn->tcpls, conn->conn_fd, &recvbuf);
+      ret = handle_tcpls_read(conn->tcpls, conn->conn_fd, conn->recvbuf, NULL, conn_tcpls);
       if (ptls_handshake_is_complete(conn->tcpls->tls)){
-        ptls_buffer_dispose(&recvbuf);
         return 0;
       }
       break;
     }
   }
-  ptls_buffer_dispose(&recvbuf);
   return ret;
 }
 
 static int handle_server_perf_test(struct conn_to_tcpls *conn, fd_set
-    *readset, fd_set *writeset, ptls_buffer_t *recvbuf, uint8_t *data, int datalen) {
+    *readset, fd_set *writeset, uint8_t *data, int datalen, list_t *conn_tcpls) {
   int ret = 1;
   if (FD_ISSET(conn->conn_fd, readset) && conn->state >= CONNECTED) {
-    ret = handle_tcpls_read(conn->tcpls, conn->conn_fd, recvbuf);
-    recvbuf->off = 0;
+    ret = handle_tcpls_read(conn->tcpls, conn->conn_fd, conn->recvbuf, NULL, conn_tcpls);
+    /** /!\ does not work if we multiplex streams! /!\ */
+    ptls_buffer_t *buf = tcpls_get_stream_buffer(conn->recvbuf, conn->streamid);
+    if (buf)
+      buf->off = 0;
     if (ret == -2) {
       fprintf(stderr, "Setting socket %d as primary\n", conn->conn_fd);
       conn->is_primary = 1;
@@ -507,17 +582,16 @@ static int handle_server_multipath_test(list_t *conn_tcpls, integration_test_t t
     *readset, fd_set *writeset) {
   /** Now Read data for all tcpls_t * that wants to read */
   int ret = 1;
-  ptls_buffer_t recvbuf;
-  ptls_buffer_init(&recvbuf, "", 0);
   for (int i = 0; i < conn_tcpls->size; i++) {
     struct conn_to_tcpls *conn = list_get(conn_tcpls, i);
     if (FD_ISSET(conn->conn_fd, readset) && conn->state >= CONNECTED) {
-      ret = handle_tcpls_read(conn->tcpls, conn->conn_fd, &recvbuf);
+      ret = handle_tcpls_read(conn->tcpls, conn->conn_fd, conn->recvbuf, NULL, conn_tcpls);
       if (ret == -2) {
         fprintf(stderr, "Setting socket %d as primary\n", conn->conn_fd);
         conn->is_primary = 1;
         ret = 0;
       }
+      conn->recvbuf->decryptbuf->off = 0;
       if (ptls_handshake_is_complete(conn->tcpls->tls) && *inputfd > 0 &&
           (conn->is_primary || ((test == T_AGGREGATION  || test ==
                                  T_AGGREGATION_TIME) && conn->streamid)))
@@ -525,7 +599,6 @@ static int handle_server_multipath_test(list_t *conn_tcpls, integration_test_t t
       break;
     }
   }
-  ptls_buffer_dispose(&recvbuf);
   /** Write data for all tcpls_t * that wants to write :-) */
   for (int i = 0; i < conn_tcpls->size; i++) {
     struct conn_to_tcpls *conn = list_get(conn_tcpls, i);
@@ -542,9 +615,8 @@ static int handle_server_multipath_test(list_t *conn_tcpls, integration_test_t t
 
 static int handle_client_perf_test(tcpls_t *tcpls, struct cli_data *data) {
   int ret;
-  ptls_buffer_t recvbuf;
-  ptls_buffer_init(&recvbuf, "", 0);
-  if (handle_tcpls_read(tcpls, 0, &recvbuf) < 0) {
+  tcpls_buffer_t *recvbuf = tcpls_stream_buffers_new(tcpls, 1);
+  if (handle_tcpls_read(tcpls, 0, recvbuf, data->streamlist, NULL) < 0) {
     ret = -1;
     goto Exit;
   }
@@ -578,16 +650,22 @@ static int handle_client_perf_test(tcpls_t *tcpls, struct cli_data *data) {
     for (int i = 0; i < data->socklist->size; i++) {
       socket = list_get(data->socklist, i);
       if (FD_ISSET(*socket, &readfds)) {
-        if ((ret = handle_tcpls_read(tcpls, *socket, &recvbuf)) < 0) {
+        if ((ret = handle_tcpls_read(tcpls, *socket, recvbuf, data->streamlist, NULL)) < 0) {
           fprintf(stderr, "handle_tcpls_read returned %d\n",ret);
           break;
         }
       }
-      recvbuf.off = 0; // blackhole the received data
+      ptls_buffer_t *buf;
+      streamid_t *streamid;
+      for (int i = 0; i < recvbuf->wtr_streams->size; i++) {
+        streamid = list_get(recvbuf->wtr_streams, i);
+        buf = tcpls_get_stream_buffer(recvbuf, *streamid);
+        buf->off = 0;// blackhole the received data
+      }
     }
   }
 Exit:
-  ptls_buffer_dispose(&recvbuf);
+  tcpls_buffer_free(tcpls, recvbuf);
   return ret;
 }
 static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data *data) {
@@ -595,11 +673,10 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
   struct timeval t_init, t_now;
   gettimeofday(&t_init, NULL);
   int ret;
-  ptls_buffer_t recvbuf;
-  ptls_buffer_init(&recvbuf, "", 0);
+  tcpls_buffer_t *recvbuf = tcpls_aggr_buffer_new(tcpls);
   FILE *mtest = fopen("multipath_test.data", "w");
   assert(mtest);
-  if (handle_tcpls_read(tcpls, 0, &recvbuf) < 0) {
+  if (handle_tcpls_read(tcpls, 0, recvbuf, data->streamlist, NULL) < 0) {
     ret = -1;
     goto Exit;
   }
@@ -647,7 +724,7 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
     for (int i = 0; i < data->socklist->size; i++) {
       socket = list_get(data->socklist, i);
       if (FD_ISSET(*socket, &readfds)) {
-        if ((ret = handle_tcpls_read(tcpls, *socket, &recvbuf)) < 0) {
+        if ((ret = handle_tcpls_read(tcpls, *socket, recvbuf, data->streamlist, NULL)) < 0) {
           fprintf(stderr, "handle_tcpls_read returned %d\n",ret);
           break;
         }
@@ -691,8 +768,8 @@ static int handle_client_transfer_test(tcpls_t *tcpls, int test, struct cli_data
       }
     }
     /** consume received data */
-    fwrite(recvbuf.base, recvbuf.off, 1, mtest);
-    recvbuf.off = 0;
+    fwrite(recvbuf->decryptbuf->base, recvbuf->decryptbuf->off, 1, mtest);
+    recvbuf->decryptbuf->off = 0;
 
     if (test == T_MULTIPATH && received_data >= 41457280  && !has_remigrated) {
       has_remigrated = 1;
@@ -803,7 +880,7 @@ Exit:
   fclose(mtest);
   if (outputfile)
     fclose(outputfile);
-  ptls_buffer_dispose(&recvbuf);
+  tcpls_buffer_free(tcpls, recvbuf);
   return ret;
 }
 
@@ -1147,8 +1224,6 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
   ctx->output_decrypted_tcpls_data = 0;
   list_t *tcpls_l = new_list(sizeof(tcpls_t *),2);
   memset(&timeout, 0, sizeof(struct timeval));
-  ptls_buffer_t recvbuf;
-  ptls_buffer_init(&recvbuf, "", 0);
   int datalen_max = 16 * 16640;
   int datalen = datalen_max;
   uint8_t data_to_write[datalen];
@@ -1259,6 +1334,11 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
             conntcpls.tcpls = new_tcpls;
             if (test == T_MULTIPATH || new_tcpls->enable_failover || test == T_AGGREGATION || test == T_AGGREGATION_TIME)
               conntcpls.tcpls->enable_multipath = 1;
+
+            if (test == T_SIMPLE_TRANSFER || test == T_MULTIPATH || test == T_AGGREGATION || test == T_AGGREGATION_TIME)
+              conntcpls.recvbuf = tcpls_aggr_buffer_new(conntcpls.tcpls);
+            else
+              conntcpls.recvbuf = tcpls_stream_buffers_new(conntcpls.tcpls, 2);
             list_add(tcpls_l, new_tcpls);
             /** ADD our ips  -- This might worth to be ctx and instance-based?*/
             tcpls_add_ips(new_tcpls, sa_ours, NULL, nbr_ours, 0);
@@ -1284,7 +1364,7 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
           }
           break;
         case T_PERF:
-          if ((ret = handle_server_perf_test((struct conn_to_tcpls *) list_get(conn_tcpls, 0), &readset, &writeset, &recvbuf,  data_to_write, datalen)) < 1) {
+          if ((ret = handle_server_perf_test((struct conn_to_tcpls *) list_get(conn_tcpls, 0), &readset, &writeset,  data_to_write, datalen, conn_tcpls)) < 1) {
             if (ret == -2)
               datalen = datalen/2;
             else if (ret < 0) {
@@ -1319,12 +1399,12 @@ static int run_server(struct sockaddr_storage *sa_ours, struct sockaddr_storage
     tcpls_t *tcpls = list_get(tcpls_l, i);
     tcpls_free(tcpls);
   }
-  ptls_buffer_dispose(&recvbuf);
+  conn_tcpls_free(conn_tcpls);
   list_free(conn_tcpls);
   return 0;
 Exit:
+  conn_tcpls_free(conn_tcpls);
   list_free(conn_tcpls);
-  ptls_buffer_dispose(&recvbuf);
   exit(0);
 }
 

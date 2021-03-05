@@ -1573,6 +1573,7 @@ static int try_decrypt_with_multistreams(tcpls_t *tcpls, const void *input,
   size_t consumed;
   int restore_buf = 0;
   ptls_buffer_t *decryptbuf = NULL;
+  list_clean(buf->wtr_streams);
   connect_info_t *con = connection_get(tcpls, tcpls->transportid_rcv);
   /** if we have something in tcpls->buffrag, let's push it to this
    * con->buffrag*/
@@ -1602,12 +1603,16 @@ static int try_decrypt_with_multistreams(tcpls_t *tcpls, const void *input,
         decryptbuf = buf->decryptbuf;
       else
         decryptbuf = tcpls_get_stream_buffer(buf, stream->streamid);
+      int decryptoff = decryptbuf->off;
       do {
         consumed = input_size - *input_off;
         rret = ptls_receive(tcpls->tls, decryptbuf, con->buffrag, input + *input_off, &consumed);
         *input_off += consumed;
       } while (rret == 0 && *input_off < input_size);
       tcpls->tls->traffic_protection.dec.aead = remember_aead;
+      /* Add this stream in the want-to-read list for the app */
+      if (decryptbuf->off-decryptoff > 0 && buf->bufkind == STREAMBASED)
+        list_add(buf->wtr_streams, &stream->streamid);
       /*we need to restore buffrag if we had some and try with another streama*/
       if (rret == PTLS_ALERT_BAD_RECORD_MAC && restore_buf && con->buffrag->capacity) {
         con->buffrag->off = restore_buf;
