@@ -1514,29 +1514,21 @@ int tcpls_set_user_timeout(tcpls_t *tcpls, int transportid,  uint16_t value,
   return ret;
 }
 
-int ptls_set_happy_eyeball(ptls_t *ptls) {
-  return 0;
-}
-
-int ptls_set_faileover(ptls_t *ptls, char *address) {
-  return 0;
-}
-
 /**
  * Copy bpf_prog_bytecode inside ptls->tcpls_options
  */
-int ptls_set_bpf_cc(ptls_t *ptls, const uint8_t *bpf_prog_bytecode, size_t bytecodelen,
+int tcpls_set_bpf_cc(tcpls_t *tcpls, const uint8_t *bpf_prog_bytecode, size_t bytecodelen,
     int setlocal, int settopeer) {
   int ret = 0;
   uint8_t* bpf_cc = NULL;
   if ((bpf_cc =  malloc(bytecodelen)) == NULL)
     return PTLS_ERROR_NO_MEMORY;
   memcpy(bpf_cc, bpf_prog_bytecode, bytecodelen);
-  ret = tcpls_init_context(ptls, bpf_cc, bytecodelen, BPF_CC, setlocal, settopeer);
+  ret = tcpls_init_context(tcpls->tls, bpf_cc, bytecodelen, BPF_CC, setlocal, settopeer);
   if (ret)
     return -1;
   if (setlocal){
-    ret = setlocal_bpf_cc(ptls, bpf_prog_bytecode, bytecodelen);
+    ret = setlocal_bpf_cc(tcpls->tls, bpf_prog_bytecode, bytecodelen);
   }
   return ret;
 }

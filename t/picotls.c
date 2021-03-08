@@ -1297,7 +1297,7 @@ static void test_sends_varlen_bpf_prog(void)
   uint8_t input[50000];
   memset(input, 0, 50000);
   ptls_buffer_init(&sbuf, input, 50000);
-  ret = ptls_set_bpf_cc(server, input, 50000, 1, 1);
+  ret = tcpls_set_bpf_cc(tcpls_server, input, 50000, 1, 1);
   ok(ret == 0);
   ret = tcpls_send_tcpoption(tcpls_server, 0, BPF_CC, 0);
   ok(ret == 0);

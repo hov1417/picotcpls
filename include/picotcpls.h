@@ -45,8 +45,8 @@ typedef enum tcpls_enum_t {
   STREAM_CLOSE_ACK,
   TRANSPORT_NEW,
   TRANSPORT_UPDATE,
-  /* since it is a protocol message, make sure the enum is compiled into a 32
-   * bits representation */
+  /* since it is a protocol message (we do memcpy of this thing), make sure the
+   * enum is compiled into a 32 bits representation */
   tcpls_enum_sentinel = 4294967295UL
 } tcpls_enum_t;
 
@@ -236,11 +236,12 @@ struct st_tcpls_t {
   uint32_t send_mpseq;
   /** next expected receive seq */
   uint32_t next_expected_mpseq;
-  /** Linked List of address to be used for happy eyeball
-   * and for failover
-   */
   /* Size of a varlen option set when we receive a CONTROL_VARLEN_BEGIN */
   uint32_t varlen_opt_size;
+  /**
+   * Linked List of address to be used for happy eyeball
+   * and for failover
+   */
   /** Destination addresses */
   tcpls_v4_addr_t *v4_addr_llist;
   tcpls_v6_addr_t *v6_addr_llist;
@@ -248,16 +249,16 @@ struct st_tcpls_t {
   tcpls_v4_addr_t *ours_v4_addr_llist;
   tcpls_v6_addr_t *ours_v6_addr_llist;
   /**
-   * pointer to the Application-created buffer -- Only one may be created at a
-   * time
+   * pointer to the Application-created receiving buffer -- Only one may be
+   * created at a time
    **/
   tcpls_buffer_t *buffer;
 
   /**
-   *  enable failover; used for rst resistance in case of 
+   *  enable failover; used for rst/drop resistance in case of
    *  network outage .. If multiple connections are available
    *  This is costly since it also enable ACKs at the TCPLS layer, and
-   *  bufferization of the data sent 
+   *  bufferization of the data sent
    *  */
   unsigned int enable_failover : 1;
   /**
@@ -375,9 +376,7 @@ int tcpls_receive(ptls_t *tls, tcpls_buffer_t *input, struct timeval *tv);
 int tcpls_set_user_timeout(tcpls_t *tcpls, int transportid, uint16_t value,
     uint16_t msec_or_sec, uint8_t setlocal, uint8_t settopeer);
 
-int ptls_set_failover(ptls_t *ptls, char *address);
-
-int ptls_set_bpf_scheduler(ptls_t *ptls, const uint8_t *bpf_prog_bytecode,
+int tcpls_set_bpf_scheduler(tcpls_t *tcpls, const uint8_t *bpf_prog_bytecode,
     size_t bytecodelen, int setlocal, int settopeer);
 
 int tcpls_send_tcpoption(tcpls_t *tcpls, int transportid, tcpls_enum_t type, int sendnow);
