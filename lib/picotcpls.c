@@ -2770,7 +2770,7 @@ static int did_we_sent_everything(tcpls_t *tcpls, tcpls_stream_t *stream, int by
       fd_set writefds;
       FD_ZERO(&writefds);
       FD_SET(con->socket, &writefds);
-      while (sending != sendbuf->off && 
+      while (sending != sendbuf->off &&
           (ret = select(con->socket+1, NULL, &writefds, NULL, &timeout)) > 0) {
         ret = send(con->socket, sendbuf->base+sending,
             sendbuf->off-sending, 0);
