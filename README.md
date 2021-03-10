@@ -69,10 +69,9 @@ Like picotls, the implementation of picotcpls is licensed under the MIT license.
 Building picotcpls
 ---
 
-If you have cloned picotpls from git then ensure that you have initialised the submodules:
+If you have cloned picotcpls from git then ensure that you have initialised the submodules:
 ```
-% git submodule init
-% git submodule update
+% git submodule update --init
 % sudo apt-get install faketime libscope-guard-perl libtest-tcp-perl
 ```
 
@@ -90,7 +89,7 @@ Usage documentation
 
 This is an overview of an ongoing research and development project. Many
 things are missing and some features may change in the future. The
-current description is intented to provide an intuition of the potential usefulness
+current description is intended to provide an intuition of the potential usefulness
 TCPLS.
 
 ### Initializing the Context
@@ -124,13 +123,13 @@ boolean value indicating whether the connection is server side or not.
 The application is responsible for freeing its memory, using
 `tcpls_free(tcpls)` when the connection wants to be closed.  
 
-A tcpls connection may have multiple addresses and streams attached
+A tcpls connection may have multiple addresses and streams attached to
 them. Addresses require to be added first if we expect to use them for
 a TCPLS connection.
 
 ### Adding addresses
 
-picotls supports both v4 and v6 IP addresses, which the application can
+picotcpls supports both v4 and v6 IP addresses, which the application can
 advertize by calling   
 
 `tcpls_add_v4(ptls_t *tls, struct sockaddr_in
@@ -162,7 +161,7 @@ will be also included.
 ### Connecting with multiple addresses
 
 picotcpls provides `tcpls_connect(ptls_t *tls, struct sockaddr *src,
-struct sockaddr *dest, struct timeval *timeout)` to make TCP connections
+struct sockaddr *dest, struct timeval *timeout)` to initiate TCP connections
 to the server. The bi-partite graph connection can be made explicit by
 calling several times `tcpls_connect`. For
 example, assuming that both the client and the server have a v4 and v6:  
@@ -172,12 +171,12 @@ tcpls_connect(tls, src_v4, dest_v4, NULL);
 tcpls_connect(tls, src_v6, dest_v6, timeout);
 ```
 spawns two TCP connections between the two pairs of addresses, for which
-the second `tcpls_connect` waits until all connected or the timeout
-fired. TCPLS monitors at which speed those connection connected and
-automatically set as primary the fastest.
+the second `tcpls_connect` waits until all are connected or the timeout
+fired. TCPLS monitors how fast those connection connected and
+automatically sets as primary the fastest.
 Callbacks events are triggered when a connection succeeded, and the
 application may know which addresses are usable to attach streams, and
-which ones require to call tcpls_connect again in case the timeout fired.
+which ones may require to call tcpls_connect again in case the timeout fired.
 
 Note that this design allows the application to implement various
 connectivity policies, such as happy eyeball with a `timeout1` of 50ms:
@@ -204,16 +203,16 @@ connection lifetime.
 
 ### Handshake
 
-picotcpls offers a wrapper around picotls's interactive hanshake (`ptls_handshake`):  
+picotcpls offers a wrapper around picotls's interactive handshake (`ptls_handshake`):
 
 `tcpls_handshake(ptls_t *tls, ptls_handshake_properties_t *properties);`
 
-this function waits until the handshake is complete or an error occured.
+this function waits until either the TLS handshake completed or an error occured.
 It may also triggers various callbacks depending on events occuring in
 the handshake.
 
 `properties` defines handshake configurations that the client and server
-can configure to modify the TCPLS handshake, such as the connection in
+can use to modify the TCPLS handshake, such as the connection in
 which the handshake takes place (in case of multiple connections).
 
 In case of multiple connections (using multiple addresses), a first
