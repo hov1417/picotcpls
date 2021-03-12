@@ -3217,7 +3217,7 @@ static int new_stream_derive_aead_context(ptls_t *tls, tcpls_stream_t *stream, i
     0, key, iv);
   if (stream->aead_dec)
     return PTLS_ERROR_NO_MEMORY;
-  stream->aead_dec = 0;
+  stream->aead_dec->seq = 0;
   return 0;
 }
 
