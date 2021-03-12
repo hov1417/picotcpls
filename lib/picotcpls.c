@@ -3199,6 +3199,7 @@ static int new_stream_derive_aead_context(ptls_t *tls, tcpls_stream_t *stream, i
       1, key, iv);
   if (!stream->aead_enc)
     return PTLS_ERROR_NO_MEMORY;
+  stream->aead_enc->seq = 0;
 
   if ((ret = ptls_hkdf_expand_label(tls->cipher_suite->hash, key,
           tls->cipher_suite->aead->key_size, ptls_iovec_init(ctx_dec->secret,
@@ -3216,6 +3217,7 @@ static int new_stream_derive_aead_context(ptls_t *tls, tcpls_stream_t *stream, i
     0, key, iv);
   if (stream->aead_dec)
     return PTLS_ERROR_NO_MEMORY;
+  stream->aead_dec = 0;
   return 0;
 }
 
