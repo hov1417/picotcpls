@@ -3148,11 +3148,11 @@ static int check_con_has_connected(tcpls_t *tcpls, connect_info_t *con, int *res
 static void stream_derive_new_aead_iv(ptls_t *tls, uint8_t *iv, int iv_size, uint32_t offset, int is_client_origin) {
   /** TODO for parallel stream attachment, the offset should be given in the
    * STREAM_ATTACH message */
-  PTLS_DEBUGF(stderr, "New IV with iv(%d): ", iv_size);
+  PTCPLS_DEBUGF("New IV with iv(%d): ", iv_size);
   for (int i = 0; i < iv_size; i++) {
-    PTLS_DEBUGF(stderr, "%02x ", iv[i]);
+    PTCPLS_DEBUGF("%02x ", iv[i]);
   }
-  PTLS_DEBUGF(stderr, "and offset: %d\n", offset);
+  PTCPLS_DEBUGF("and offset: %d\n", offset);
   if (iv_size == 12) {
     uint32_t msb_iv = ntohl(*(uint32_t *) (iv));
     if (is_client_origin)
@@ -3161,11 +3161,11 @@ static void stream_derive_new_aead_iv(ptls_t *tls, uint8_t *iv, int iv_size, uin
       msb_iv = (msb_iv - offset) % 0xffffffff;
     msb_iv = htonl(msb_iv);
     memcpy(iv, &msb_iv, sizeof(uint32_t));
-    PTLS_DEBUGF(stderr, "Resulting iv(%d): ", iv_size);
+    PTCPLS_DEBUGF("Resulting iv(%d): ", iv_size);
     for (int i = 0; i < iv_size; i++) {
-      PTLS_DEBUGF(stderr, "%02x ", iv[i]);
+      PTCPLS_DEBUGF("%02x ", iv[i]);
     }
-    PTLS_DEBUGF(stderr, "\n");
+    PTCPLS_DEBUGF("\n");
   }
   else if (iv_size == 16) {
     fprintf(stderr, "IV derivation with 128 bits IVs: Not implemented yet\n");

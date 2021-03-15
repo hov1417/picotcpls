@@ -26,6 +26,13 @@
 // MAX_ENCRYPTED_RECORD_SIZE * 15
 #define SENDING_ACKS_BYTES_WINDOW 249600
 
+#if defined(PTCPLS_DEBUG) && PTCPLS_DEBUG
+#define PTCPLS_DEBUGF(...) fprintf(stderr, __VA_ARGS__)
+#else
+#define PTCPLS_DEBUGF(...)
+#endif
+
+
 /** TCPLS messages we would support in the TLS context */
 typedef enum tcpls_enum_t {
   NONE, // this one is just for plain data

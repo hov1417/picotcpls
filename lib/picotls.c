@@ -962,8 +962,6 @@ static int setup_traffic_protection(ptls_t *tls, int is_enc, const char
 
     log_secret(tls, log_labels[ptls_is_server(tls) == is_enc][epoch],
                ptls_iovec_init(ctx->secret, tls->key_schedule->hashes[0].algo->digest_size));
-    PTLS_DEBUGF("[%s] %02x%02x,%02x%02x\n", log_labels[ptls_is_server(tls)][epoch], (unsigned)ctx->secret[0],
-                (unsigned)ctx->secret[1], (unsigned)ctx->aead->static_iv[0], (unsigned)ctx->aead->static_iv[1]);
 
     return 0;
 }
