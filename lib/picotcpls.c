@@ -3154,13 +3154,13 @@ static void stream_derive_new_aead_iv(ptls_t *tls, uint8_t *iv, int iv_size, uin
   }
   PTLS_DEBUGF(stderr, "and offset: %d\n", offset);
   if (iv_size == 12) {
-    uint32_t msb_iv = ntohl(*(uint32_t *) (iv + iv_size - sizeof(uint32_t)));
+    uint32_t msb_iv = ntohl(*(uint32_t *) (iv));
     if (is_client_origin)
       msb_iv = (msb_iv + offset) % 0xffffffff;
     else
       msb_iv = (msb_iv - offset) % 0xffffffff;
     msb_iv = htonl(msb_iv);
-    memcpy(iv + iv_size - sizeof(uint32_t), &msb_iv, sizeof(uint32_t));
+    memcpy(iv, &msb_iv, sizeof(uint32_t));
     PTLS_DEBUGF(stderr, "Resulting iv(%d): ", iv_size);
     for (int i = 0; i < iv_size; i++) {
       PTLS_DEBUGF(stderr, "%02x ", iv[i]);
