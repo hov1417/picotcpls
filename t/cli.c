@@ -424,12 +424,11 @@ static int handle_tcpls_read(tcpls_t *tcpls, int socket, tcpls_buffer_t *buf, li
   memset(&timeout, 0, sizeof(timeout));
   int *init_sizes;
   if (tcpls->tls->is_server) {
-    init_sizes = malloc(sizeof(int)*conn_tcpls->size);
+    init_sizes = calloc(conn_tcpls->size, sizeof(int));
   }
   else {
-    init_sizes = malloc(sizeof(int)*streamlist->size);
+    init_sizes = calloc(streamlist->size ? streamlist->size : 1, sizeof(int));
   }
-  memset(init_sizes, 0, sizeof(*init_sizes));
   if (buf->bufkind == AGGREGATION)
     init_sizes[0] = buf->decryptbuf->off;
   else {
