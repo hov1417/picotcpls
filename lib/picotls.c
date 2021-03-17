@@ -367,6 +367,7 @@ int buffer_push_encrypted_records(ptls_t *tls, streamid_t streamid, ptls_buffer_
     int ret = 0;
     int tcpls_header_size = get_tcpls_header_size(tls->tcpls, type, tcpls_message);
     uint8_t tcpls_header[tcpls_header_size];
+    uint32_t tcpls_message_value = htonl(tcpls_message);
     while (len != 0) {
         /** XXX refactor to a function to format the tcpls header */
         size_t chunk_size = len;
@@ -374,12 +375,12 @@ int buffer_push_encrypted_records(ptls_t *tls, streamid_t streamid, ptls_buffer_
         if ((tls->tcpls && tls->tcpls->enable_multipath && (type ==
               PTLS_CONTENT_TYPE_TCPLS_DATA || is_varlen(tcpls_message)))) {
           /** header multipath  -- just a sequence number*/
-          mpseq = tls->tcpls->send_mpseq++;
+          mpseq = htonl(tls->tcpls->send_mpseq++);
           memcpy(tcpls_header, &mpseq, sizeof(mpseq));
-          memcpy(tcpls_header+sizeof(mpseq), &tcpls_message, 4);
+          memcpy(tcpls_header+sizeof(mpseq), &tcpls_message_value, sizeof (tcpls_message_value));
         }
         else if (tcpls_header_size > 0)
-          memcpy(tcpls_header, &tcpls_message, tcpls_header_size);
+          memcpy(tcpls_header, &tcpls_message_value, sizeof(tcpls_message_value));
 
         if (chunk_size > PTLS_MAX_PLAINTEXT_RECORD_SIZE-tcpls_header_size)
             chunk_size = PTLS_MAX_PLAINTEXT_RECORD_SIZE-tcpls_header_size;
