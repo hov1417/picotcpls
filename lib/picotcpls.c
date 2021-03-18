@@ -1514,7 +1514,7 @@ int tcpls_set_user_timeout(tcpls_t *tcpls, int transportid,  uint16_t value,
   uint16_t *val = malloc(sizeof(uint16_t));
   if (val == NULL)
     return PTLS_ERROR_NO_MEMORY;
-  *val = value | msec_or_sec << 15;
+  *val = htons(value | (msec_or_sec << 15));
   ret = tcpls_init_context(tcpls->tls, val, 2, USER_TIMEOUT, setlocal, settopeer);
   if (ret)
     return ret;
@@ -1522,7 +1522,7 @@ int tcpls_set_user_timeout(tcpls_t *tcpls, int transportid,  uint16_t value,
     connect_info_t *con = connection_get(tcpls, transportid);
     if (!con)
       return PTLS_ERROR_CONN_NOT_FOUND;
-    ret = setlocal_usertimeout(con->socket, *val);
+    ret = setlocal_usertimeout(con->socket, msec_or_sec ? value : value * 1000);
   }
   return ret;
 }
@@ -2309,7 +2309,7 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
     case USER_TIMEOUT:
       {
         uint16_t *nval = malloc(inputlen);
-        *nval = ntohl(*(uint16_t *)input);
+        *nval = *(uint16_t *)input;
         int ret;
         ret = tcpls_init_context(ptls, nval, 2, USER_TIMEOUT, 1, 0);
         if (ret)
@@ -2321,9 +2321,10 @@ int handle_tcpls_control(ptls_t *ptls, tcpls_enum_t type,
         uint32_t val = 0;
         /*take the last 15 bits of nval */
         uint16_t mask = (1 << 15) - 1;
-        val = *nval & mask;
+        uint16_t rval = ntohs(*nval);
+        val = rval & mask;
         /* in seconds */
-        if (1 == (*nval >> 15))
+        if (1 == (rval >> 15))
           val = 1000*val;
         if (setlocal_usertimeout(con->socket, val) < 0) {
           //XXX
@@ -2699,7 +2700,7 @@ int handle_tcpls_control_record(ptls_t *tls, struct st_ptls_record_t *rec)
      * use to know how much data we need to buffer
      **/
     if (type == CONTROL_VARLEN_BEGIN) {
-      uint32_t optsize = *(uint32_t *) rec->fragment;
+      uint32_t optsize = ntohl(*(uint32_t *) rec->fragment);
       tls->tcpls->varlen_opt_size = optsize;
       if (optsize > PTLS_MAX_PLAINTEXT_RECORD_SIZE-sizeof(type)) {
         /** We need to buffer it */
