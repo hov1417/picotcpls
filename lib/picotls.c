@@ -1732,7 +1732,8 @@ static int send_client_hello(ptls_t *tls, ptls_message_emitter_t *emitter, ptls_
                 buffer_push_extension(sendbuf, PTLS_EXTENSION_TYPE_MPJOIN, {
                     ptls_buffer_push_block(sendbuf, 1, {
                         ptls_buffer_pushv(sendbuf, tls->tcpls->connid, CONNID_LEN);
-                        ptls_buffer_pushv(sendbuf, &properties->client.transportid, 4);
+                        uint32_t transportid = htonl(properties->client.transportid);
+                        ptls_buffer_pushv(sendbuf, &transportid, 4);
                     });
                     if (tls->tcpls->cookies->size == 0)
                       return PTLS_ALERT_HANDSHAKE_NO_MORE_COOKIE;
@@ -3215,6 +3216,7 @@ static int decode_client_hello(ptls_t *tls, struct st_ptls_client_hello_t *ch,
             src += len;
             len = sizeof(uint32_t);
             memcpy(&transportid, src, len);
+            transportid = ntohl(transportid);
             src += len;
           });
           ptls_decode_block(src, end, 1, {
