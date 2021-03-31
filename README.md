@@ -398,7 +398,7 @@ Using the cli command
 
 Run the test server (at 127.0.0.1:8443):
 ```
-% ./cli -t -T perf /path/to/certificate.pem -k /path/to/private-key.pem  127.0.0.1 8443
+% ./cli -t -T perf -c /path/to/certificate.pem -k /path/to/private-key.pem  127.0.0.1 8443
 ```
 
 Connect to the mtest server:
