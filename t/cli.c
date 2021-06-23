@@ -671,8 +671,8 @@ Exit: {
   struct timespec end_time;
   clock_gettime(CLOCK_MONOTONIC, &end_time);
   double duration = (end_time.tv_sec - start_time.tv_sec) + (end_time.tv_nsec - start_time.tv_nsec) / 1000000000.0;
-  double throughput = (double) total_recvd * 8 / duration / 10000000.0;
-  fprintf(stderr, "Received %ld bytes over %0.3f seconds, goodput is %0.3f Mbit/s\n", total_recvd, duration, throughput);
+  double goodput = (double) total_recvd * 8 / duration / 1000000.0;
+  fprintf(stderr, "Received %ld bytes over %0.3f seconds, goodput is %0.3f Mbit/s\n", total_recvd, duration, goodput);
   tcpls_buffer_free(tcpls, recvbuf);
 }
   return ret;
