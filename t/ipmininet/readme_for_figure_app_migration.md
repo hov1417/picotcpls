@@ -37,9 +37,7 @@ current directory. If you do the experiment several times, be careful to
 erase tcpls_migration_goodput or the next experiment's result would just
 be appended to the file.
 
-To capture TCP's throughput, open a client or server terminal and
-capture a .pcap with tcpdump on _one_ interface. Redirect its output to
-a file.
+To capture TCP's throughput, open a client terminal:
 
 ```
 xterm c
@@ -51,7 +49,8 @@ experiment above:
 tcpdump -n -i c-eth0 -v > my_exp_tcpls_migration.pcap
 ```
 
-kill it when the experiment completed.
+kill it when the experiment completed. You can either 'quit' ipmininet
+from the CLI or ctrl-c the tcpdump process.
 
 Important! Save the timing events you see on the console. Those are
 STREAM_ATTACH events, STREAM_CLOSE events, i.e., all events that the
@@ -77,6 +76,5 @@ The converted tcpdump file named tcpls_migration_pruned.log, and the
 file tcpls_migration_goodput then needs to be feeded to the plot script.
 You can simply move them in pretty_plotify/results/ directory on the
 paper's repository. Do not forget to either edit the --event_at in
-plots.sh, or to call yourself plot_migration.py
-
+plots.sh, or to call yourself plot_migration.py with appropriate inputs.
 
