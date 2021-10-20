@@ -14,6 +14,10 @@ Open a terminal for the client and server from mininet's command line interprete
 xterm c s
 ```
 
+If for some reasons you have issues with xterm, you may also directly
+launch the server/client scripts on the mininet CLI. (e.g., `s
+./run_test_server_multipath.sh &`)
+
 Then, on the server, do:
 
 ```
@@ -26,9 +30,29 @@ On client, do the following to launch the experiment:
 ./run_test_client_multipath.sh
 ```
 
-This experiment will download a 60MiB file and perform two application-level migrations during the download. The file "tcpls_migration_goodput" should be generated and be available in the current directory.
+This experiment will download a 60MiB file and perform two
+application-level migrations during the download. The file
+"tcpls_migration_goodput" should be generated and be available in the
+current directory. If you do the experiment several times, be careful to
+erase tcpls_migration_goodput or the next experiment's result would just
+be appended to the file.
 
-To capture TCP's throughput, open a client or server terminal and capture a .pcap with tcpdump on _one_ interface. Redirect its output to a file.
+To capture TCP's throughput, open a client or server terminal and
+capture a .pcap with tcpdump on _one_ interface. Redirect its output to
+a file.
+
+```
+xterm c
+```
+then on the client's terminal, launch tcpdump right before launching the
+experiment above:
+
+```
+tcpdump -n -i c-eth0 -v > my_exp_tcpls_migration.pcap
+```
+
+kill it when the experiment completed.
+
 
 After the experiment, convert the .pcap using the python script convert_tcpdump.py: 
 
@@ -42,7 +66,6 @@ optional arguments:
   -t T          Path to the _ascii_ trace file
   -o O          Output directorty, default .
   -oname ONAME  Output filename
-jaym@office:~/Documents/picotcpl
 ```
 
 The converted tcpdump file, and the file tcpls_migration_goodput then needs to be feeded to the plot script.

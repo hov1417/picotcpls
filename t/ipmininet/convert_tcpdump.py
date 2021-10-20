@@ -18,10 +18,16 @@ if __name__ == "__main__":
       ip_line = True
       paths = {}
       for line in trace:
+          if "ICMP" in line or "link-address" in line or "Ethernet" in line or "flowlabel" in line:
+              continue
+
           if ip_line:
+              timestr = line.split(" ")[0]
+              if "IP" in timestr:
+                  trace.readline()
+                  continue
               if "IP6" in line:
                   packet_length = int(line.split("length:")[1].split(")")[0])
-                  timestr = line.split(" ")[0]
                   ip_src = line.split(">")[0].split()[-1]
                   ip_dest = line.split(">")[1].split()[0][:-1]
                   print("{0} {1} > {2} {3}".format(timestr, ip_src, ip_dest,
@@ -29,7 +35,6 @@ if __name__ == "__main__":
                         file=outputf)
               else:
                   packet_length = int(line.split("length")[1].split(")")[0])
-                  timestr = line.split(" ")[0]
                   ip_line=False
           else:
               if "IP6" in line:
