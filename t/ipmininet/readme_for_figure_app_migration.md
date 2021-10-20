@@ -53,8 +53,13 @@ tcpdump -n -i c-eth0 -v > my_exp_tcpls_migration.pcap
 
 kill it when the experiment completed.
 
+Important! Save the timing events you see on the console. Those are
+STREAM_ATTACH events, STREAM_CLOSE events, i.e., all events that the
+script /pretty_plotify/plot_migration.py require. See
+inside /pretty_plotify/plots.sh for example of plot_migration usage.
 
-After the experiment, convert the .pcap using the python script convert_tcpdump.py: 
+
+After the experiment, convert the .pcap using the python script convert_tcpdump.py: (use -oname tcpls_migration_pruned.log)
 
 ```
 usage: convert_tcpdump.py [-h] -t T [-o O] -oname ONAME
@@ -68,4 +73,10 @@ optional arguments:
   -oname ONAME  Output filename
 ```
 
-The converted tcpdump file, and the file tcpls_migration_goodput then needs to be feeded to the plot script.
+The converted tcpdump file named tcpls_migration_pruned.log, and the
+file tcpls_migration_goodput then needs to be feeded to the plot script.
+You can simply move them in pretty_plotify/results/ directory on the
+paper's repository. Do not forget to either edit the --event_at in
+plots.sh, or to call yourself plot_migration.py
+
+
