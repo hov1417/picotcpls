@@ -18,7 +18,8 @@ if __name__ == "__main__":
       ip_line = True
       paths = {}
       for line in trace:
-          if "ICMP" in line or "link-address" in line or "Ethernet" in line or "flowlabel" in line:
+          if "ICMP" in line or "link-address" in line or "Ethernet" in line or \
+          "flowlabel" in line or "tcpdump" in line:
               continue
 
           if ip_line:
