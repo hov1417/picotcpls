@@ -65,6 +65,48 @@ it for fun and experiments /!\
 
 Like picotls, the implementation of picotcpls is licensed under the MIT license.
 
+If you use this code within an academic publication, please cite the
+following papers:
+
+```
+@inproceedings{10.1145/3485983.3494865,
+  author = {Rochet, Florentin and Assogba, Emery and Piraux, Maxime and Edeline, Korian and Donnet, Benoit and Bonaventure, Olivier},
+  title = {TCPLS: Modern Transport Services with TCP and TLS},
+  year = {2021},
+  isbn = {9781450390989},
+  publisher = {Association for Computing Machinery},
+  address = {New York, NY, USA},
+  url = {https://doi.org/10.1145/3485983.3494865},
+  doi = {10.1145/3485983.3494865},
+  booktitle = {Proceedings of the 17th International Conference on Emerging Networking EXperiments and Technologies},
+  pages = {45–59},
+  numpages = {15},
+  keywords = {TCP, multipath TCP, transport protocols, TLS},
+  location = {Virtual Event, Germany},
+  series = {CoNEXT '21}
+}
+```
+
+```
+@inproceedings{10.1145/3422604.3425947,
+  author = {Rochet, Florentin and Assogba, Emery and Bonaventure, Olivier},
+  title = {TCPLS: Closely Integrating TCP and TLS},
+  year = {2020},
+  isbn = {9781450381451},
+  publisher = {Association for Computing Machinery},
+  address = {New York, NY, USA},
+  url = {https://doi.org/10.1145/3422604.3425947},
+  doi = {10.1145/3422604.3425947},
+  booktitle = {Proceedings of the 19th ACM Workshop on Hot Topics in Networks},
+  pages = {45–52},
+  numpages = {8},
+  keywords = {tcpls, extensibility, cross-layer, transport layer},
+  location = {Virtual Event, USA},
+  series = {HotNets '20}
+}
+```
+
+
 
 Building picotcpls
 ---
