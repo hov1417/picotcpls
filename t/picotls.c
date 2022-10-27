@@ -1491,7 +1491,7 @@ static void test_sends_tcpls_record(void)
       break;
   }
   assert(option);
-  ok(ntohs(*((uint16_t *) option->data->base)) == 10);
+  ok(*((uint16_t *) option->data->base) == 10);
 
   /*ptls_free(client);*/
   /*ptls_free(server);*/
@@ -1579,7 +1579,7 @@ static void test_server_sends_tcpls_encrypted_extensions(void)
       break;
   }
   
-  ok(ntohs(*((uint16_t *) option->data->base)) == 5);
+  ok(*((uint16_t *) option->data->base) == 5);
 
   /*ptls_free(client);*/
   /*ptls_free(server);*/
@@ -1628,12 +1628,12 @@ static void test_tcpls_usertimeout(void)
     if (option->type == USER_TIMEOUT)
       break;
   }
-  ok(ntohs(*((uint16_t*) option->data->base)) == 1);
+  ok(*((uint16_t*) option->data->base) == 1);
   /** 1 minute */
   ret = tcpls_set_user_timeout(tcpls_server, 0, 1, 1, 1, 1);
   ok(ret == -1);
   /*ok(*((uint16_t *) (*option)->data) == 32769);*/
-  ok(ntohs(*((uint16_t *) option->data->base)) == 32769);
+  ok(*((uint16_t *) option->data->base) == 32769);
   ctx->support_tcpls_options = 0;
   ctx_peer->support_tcpls_options = 0;
   /** cleanup */
