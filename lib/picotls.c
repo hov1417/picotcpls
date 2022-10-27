@@ -367,7 +367,6 @@ int buffer_push_encrypted_records(ptls_t *tls, streamid_t streamid, ptls_buffer_
     int ret = 0;
     int tcpls_header_size = get_tcpls_header_size(tls->tcpls, type, tcpls_message);
     uint8_t tcpls_header[tcpls_header_size];
-    uint32_t tcpls_message_value = htonl(tcpls_message);
     while (len != 0) {
         /** XXX refactor to a function to format the tcpls header */
         size_t chunk_size = len;
@@ -375,12 +374,12 @@ int buffer_push_encrypted_records(ptls_t *tls, streamid_t streamid, ptls_buffer_
         if ((tls->tcpls && tls->tcpls->enable_multipath && (type ==
               PTLS_CONTENT_TYPE_TCPLS_DATA || is_varlen(tcpls_message)))) {
           /** header multipath  -- just a sequence number*/
-          mpseq = htonl(tls->tcpls->send_mpseq++);
+          mpseq = tls->tcpls->send_mpseq++;
           memcpy(tcpls_header, &mpseq, sizeof(mpseq));
-          memcpy(tcpls_header+sizeof(mpseq), &tcpls_message_value, sizeof (tcpls_message_value));
+          memcpy(tcpls_header+sizeof(mpseq), &tcpls_message, 4);
         }
         else if (tcpls_header_size > 0)
-          memcpy(tcpls_header, &tcpls_message_value, sizeof(tcpls_message_value));
+          memcpy(tcpls_header, &tcpls_message, tcpls_header_size);
 
         if (chunk_size > PTLS_MAX_PLAINTEXT_RECORD_SIZE-tcpls_header_size)
             chunk_size = PTLS_MAX_PLAINTEXT_RECORD_SIZE-tcpls_header_size;
@@ -1732,8 +1731,7 @@ static int send_client_hello(ptls_t *tls, ptls_message_emitter_t *emitter, ptls_
                 buffer_push_extension(sendbuf, PTLS_EXTENSION_TYPE_MPJOIN, {
                     ptls_buffer_push_block(sendbuf, 1, {
                         ptls_buffer_pushv(sendbuf, tls->tcpls->connid, CONNID_LEN);
-                        uint32_t transportid = htonl(properties->client.transportid);
-                        ptls_buffer_pushv(sendbuf, &transportid, 4);
+                        ptls_buffer_pushv(sendbuf, &properties->client.transportid, 4);
                     });
                     if (tls->tcpls->cookies->size == 0)
                       return PTLS_ALERT_HANDSHAKE_NO_MORE_COOKIE;
@@ -3216,7 +3214,6 @@ static int decode_client_hello(ptls_t *tls, struct st_ptls_client_hello_t *ch,
             src += len;
             len = sizeof(uint32_t);
             memcpy(&transportid, src, len);
-            transportid = ntohl(transportid);
             src += len;
           });
           ptls_decode_block(src, end, 1, {
