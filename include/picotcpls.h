@@ -345,7 +345,7 @@ struct st_ptls_record_t;
 
 /** API exposed to the application */
 
-void *tcpls_new();
+void *tcpls_new(void *ctx, int is_server);
 
 int tcpls_connect(ptls_t *tls, struct sockaddr *src, struct sockaddr *dest,
     struct timeval *timeout);
