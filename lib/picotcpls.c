@@ -1370,6 +1370,8 @@ int tcpls_internal_data_process(tcpls_t *tcpls, connect_info_t *con,  int recvre
  * Wait at most tv time over all stream sockets to be available for reading
  *
  * // TODO adding configurable callbacks for TCPLS events
+ *
+ * returns 3 when exits with timout
  */
 
 int tcpls_receive(ptls_t *tls, tcpls_buffer_t *buf, struct timeval *tv) {
@@ -1388,7 +1390,10 @@ int tcpls_receive(ptls_t *tls, tcpls_buffer_t *buf, struct timeval *tv) {
     }
   }
   selectret = select(maxfd+1, &rset, NULL, NULL, tv);
-  if (selectret <= 0) {
+  if (selectret == 0) {
+    return 3;
+  }
+  if (selectret < 0) {
     return -1;
   }
   /* Call a scheduler from rsched.c */
